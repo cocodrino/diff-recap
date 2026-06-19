@@ -22,10 +22,11 @@ grasp the shape of the change *before* reading a single line.
 
 ![Architecture diagram](images/mermaid-diagram.png)
 
-### 2. 🧠 AI explanations for the tricky parts
+### 2. 🧠 AI explanations for complex logic blocks
 
-Hard-to-follow code gets a **Complex** badge and an expandable, step-by-step
-walkthrough — so dense logic stops being a wall of text.
+diff-recap detects hard-to-follow code, flags it with a **Complex** badge, and
+gives you an expandable, step-by-step AI walkthrough of exactly what the block
+does and why it works — so dense logic stops being a wall of text.
 
 ![Complex block explanation](images/complex-explanation.png)
 
@@ -42,11 +43,21 @@ Every changed file tells you what it does and why it changed — no guessing.
 
 ![Per-file summary](images/file-summary.png)
 
+### 5. 🎛️ Choose the model that runs it
+
+Before building the recap, diff-recap asks which model should do the work —
+keep your current one, or pick Opus / Sonnet / Haiku to trade quality for speed.
+
+![Model selector](images/model-selector-en.png)
+
 ### …and the rest
 
-A full overview (summary + diagram + commits + file grid), word-level diff
-highlighting, split/unified toggle, light/dark theme, English & Spanish UI, and
-shareable deep links (`recap.html#file/2`).
+A full overview (summary + diagram + commits + file grid), **word-level diff
+highlighting** (only the tokens that actually changed light up), split/unified
+toggle, light/dark theme, English & Spanish UI, and shareable deep links
+(`recap.html#file/2`).
+
+![Word-level diff](images/word-diff.png)
 
 ![Overview](images/recap-overview.png)
 
