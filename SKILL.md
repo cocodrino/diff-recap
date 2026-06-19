@@ -1,5 +1,5 @@
 ---
-name: local-recap
+name: diff-recap
 description: >-
   Turn a git range, branch, or PR diff into a single self-contained,
   fully-local interactive recap HTML — diagrams, annotated side-by-side diffs,
@@ -11,26 +11,69 @@ metadata:
 
 # Local Recap
 
-`/local-recap` builds an interactive visual recap **from a diff**, like a
+`/diff-recap` builds an interactive visual recap **from a diff**, like a
 code-review summary that a reviewer scans before reading raw lines — but the
 deliverable is a single `recap.html` file that opens in any browser over
 `file://`. Nothing is uploaded, no localhost bridge, no hosted viewer. Diagrams
 (Mermaid), the side-by-side diffs, and the AI prose are all embedded in that one
 file.
 
+## Orchestration — Ask The Model, Then Delegate
+
+This skill runs in TWO roles. The **orchestrator** (the agent that received the
+`/diff-recap` request) does only two things: pick the model, then hand the work
+to a **sub-agent**. The sub-agent does the actual recap (collect → analysis →
+generate). Do NOT run the recap procedure in the main thread.
+
+### Step 0 — Ask which model to run with
+
+Before anything else, ask the user which model the recap sub-agent should use.
+How you ask depends on the host:
+
+- **In Claude Code** (you have the `AskUserQuestion` tool): present a model
+  selector with these options — the user can always pick "Other" to type a name:
+  - `Current` — keep the session's model (recommended). Maps to: omit the
+    Agent `model` param.
+  - `Opus` — highest quality. Maps to `model: "opus"`.
+  - `Sonnet` — balanced. Maps to `model: "sonnet"`.
+  - `Haiku` — fastest/cheapest. Maps to `model: "haiku"`.
+- **In any other harness** (no `AskUserQuestion`): ask in plain text — present
+  exactly two choices: `(1) current model`, or `(2) type a model name`. Use
+  whatever model-selection mechanism that harness exposes for the typed name.
+
+Cache the answer for the session; do not re-ask on a follow-up recap unless the
+user wants to change it.
+
+### Step 1 — Delegate the recap to a sub-agent
+
+Launch ONE sub-agent (in Claude Code, the `Agent` / Task tool with the chosen
+`model`). Give it everything it needs to run headless:
+
+- the repo working directory and the resolved git range (`--base`/`--head` or
+  `--range`),
+- the absolute `<skill-dir>` so it can call the scripts,
+- the language you are conversing in with the user (so it sets `lang`),
+- the instruction to **follow "## Recap Procedure (sub-agent)" in this
+  `SKILL.md`** and to return the absolute path of the generated `recap.html`.
+
+When the sub-agent returns, report that `recap.html` path to the user. That path
+IS the deliverable.
+
 ## How It Works — Three Stages
 
 The pipeline cleanly separates **facts** (extracted mechanically from git) from
-**explanation** (written by you, the model). Facts are true by construction;
-prose is the only thing you author.
+**explanation** (written by the sub-agent). Facts are true by construction;
+prose is the only thing the sub-agent authors.
 
 ```
 1. collect.mjs   git range  ──▶  recap-data.json   (facts: files, hunks, stats, commits)
-2. YOU           analyze     ──▶  analysis.json     (summary, diagram, per-file & per-hunk WHY)
+2. SUB-AGENT     analyze     ──▶  analysis.json     (summary, diagram, per-file & per-hunk WHY)
 3. generate.mjs  merge       ──▶  recap.html        (one self-contained file)  ──▶ open
 ```
 
-## Steps
+## Recap Procedure (sub-agent)
+
+These steps run inside the sub-agent launched in Step 1.
 
 ### 1. Pick the range and collect the facts
 
@@ -69,12 +112,11 @@ the diff does not contain a fact, do not invent it.** A confidently wrong recap
 is dangerous in review.
 
 **Language.** Write ALL prose — `title`, `summary`, diagram labels, file
-`purpose`, and hunk explanations — in the SAME language you are conversing with
-the user. If the user talks to you in Spanish, write the recap in Spanish; in
-English, English. Set `"lang"` to the matching code (`"es"`, `"en"`, …) so the
-viewer's own chrome (buttons, section titles) is localized to match. English and
-Spanish chrome are built in; other codes keep English chrome but your prose
-stays in whatever language you wrote.
+`purpose`, and hunk explanations — in the language the orchestrator passed you
+(the language the user is conversing in). Set `"lang"` to the matching code
+(`"es"`, `"en"`, …) so the viewer's own chrome (buttons, section titles) is
+localized to match. English and Spanish chrome are built in; other codes keep
+English chrome but your prose stays in whatever language you wrote.
 
 Schema (all fields optional except where noted — omit what does not apply):
 
@@ -138,8 +180,9 @@ With no flags it reads `.recap/<branch>/recap-data.json` and
 `.recap/<branch>/analysis.json` and writes `.recap/<branch>/recap.html`.
 `--open` launches the default browser. Override any path with `--data`,
 `--analysis`, or `--out` if needed. The result is one self-contained HTML
-(~3 MB, mostly the inlined Mermaid engine). Report the absolute path of
-`recap.html` to the user — that IS the deliverable.
+(~3 MB, mostly the inlined Mermaid engine). **Return the absolute path of
+`recap.html`** as the sub-agent's result — the orchestrator reports it to the
+user. That path IS the deliverable.
 
 ## What The Viewer Gives The Reviewer
 
