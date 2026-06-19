@@ -17,6 +17,7 @@
       overview: "Overview", files: "Files", commits: "Commits",
       changedFiles: "Changed files", whyFile: "Why this file changed", ai: "AI",
       complex: "Complex", detailed: "Detailed explanation",
+      searchPlaceholder: "Search files & code…",
       filesCount: "files", split: "Split", unified: "Unified",
       noChanges: "No changes found in this range.",
       binary: "Binary file — diff not shown.",
@@ -28,6 +29,7 @@
       overview: "Resumen", files: "Archivos", commits: "Commits",
       changedFiles: "Archivos modificados", whyFile: "Por qué cambió este archivo", ai: "IA",
       complex: "Complejo", detailed: "Explicación detallada",
+      searchPlaceholder: "Buscar archivos y código…",
       filesCount: "archivos", split: "Lado a lado", unified: "Unificado",
       noChanges: "No se encontraron cambios en este rango.",
       binary: "Archivo binario — no se muestra el diff.",
@@ -129,20 +131,59 @@
     return rows;
   }
 
+  // ---------- intra-line (word-level) diff ----------
+  // Split into words, whitespace runs, and single symbols so highlighting lands
+  // on meaningful tokens instead of whole lines.
+  function tokenize(s) {
+    return s.match(/\s+|\w+|[^\s\w]/g) || [];
+  }
+  // Longest common subsequence over token arrays -> per-token changed flags.
+  function tokenDiff(a, b) {
+    const n = a.length, m = b.length;
+    const dp = Array.from({ length: n + 1 }, () => new Int32Array(m + 1));
+    for (let i = n - 1; i >= 0; i--)
+      for (let j = m - 1; j >= 0; j--)
+        dp[i][j] = a[i] === b[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+    const left = [], right = [];
+    let i = 0, j = 0, common = 0;
+    while (i < n && j < m) {
+      if (a[i] === b[j]) { left.push({ t: a[i], c: false }); right.push({ t: b[j], c: false }); common++; i++; j++; }
+      else if (dp[i + 1][j] >= dp[i][j + 1]) { left.push({ t: a[i], c: true }); i++; }
+      else { right.push({ t: b[j], c: true }); j++; }
+    }
+    while (i < n) left.push({ t: a[i++], c: true });
+    while (j < m) right.push({ t: b[j++], c: true });
+    // similarity = shared tokens vs. total; below threshold the lines are
+    // unrelated and a token diff would be noise, so signal "no intra-line".
+    const sim = (2 * common) / (n + m || 1);
+    return sim >= 0.3 ? { left, right } : null;
+  }
+  // Fill a cell either with plain text, or with highlighted changed tokens.
+  function fillCell(cell, text, segments, wordClass) {
+    if (!segments) { cell.textContent = text; return; }
+    for (const s of segments) {
+      if (s.c) cell.appendChild(el("span", { class: wordClass, text: s.t }));
+      else cell.appendChild(document.createTextNode(s.t));
+    }
+  }
+
   function renderDiffSplit(hunk) {
     const table = el("table", { class: "diff" });
     for (const row of sideBySide(hunk.lines)) {
       const tr = el("tr");
+      // A modified pair (both sides present, not context) gets a word-level diff.
+      const modified = !row.context && row.left && row.right;
+      const seg = modified ? tokenDiff(tokenize(row.left.content), tokenize(row.right.content)) : null;
       // left (old)
       const lg = el("td", { class: "gutter", text: row.left && row.left.oldNum != null ? String(row.left.oldNum) : "" });
       const lc = el("td", { class: "code split-cell" + (row.context ? "" : row.left ? " del" : " empty") });
-      lc.textContent = row.left ? row.left.content : "";
+      fillCell(lc, row.left ? row.left.content : "", seg && seg.left, "word-del");
       tr.appendChild(lg); tr.appendChild(lc);
       tr.appendChild(el("td", { class: "split-divider" }));
       // right (new)
       const rg = el("td", { class: "gutter", text: row.right && row.right.newNum != null ? String(row.right.newNum) : "" });
       const rc = el("td", { class: "code split-cell" + (row.context ? "" : row.right ? " add" : " empty") });
-      rc.textContent = row.right ? row.right.content : "";
+      fillCell(rc, row.right ? row.right.content : "", seg && seg.right, "word-add");
       tr.appendChild(rg); tr.appendChild(rc);
       table.appendChild(tr);
     }
@@ -315,30 +356,71 @@
   }
 
   // ---------- sidebar ----------
+  // Per-file search haystack (path + all diff line content), lowercased once.
+  const haystacks = DATA.files.map(
+    (f) => (f.path + "\n" + (f.oldPath || "") + "\n" +
+      f.hunks.map((h) => h.lines.map((l) => l.content).join("\n")).join("\n")).toLowerCase()
+  );
+
   function buildSidebar() {
     const sb = document.getElementById("sidebar");
+
+    // search box
+    const search = el("input", {
+      class: "sidebar-search", type: "search", placeholder: T.searchPlaceholder, "aria-label": T.searchPlaceholder,
+    });
+    sb.appendChild(el("div", { class: "search-wrap" }, [search]));
+
     sb.appendChild(el("div", { class: "nav-item", "data-idx": "-1", onclick: renderOverview }, [
       el("span", { text: "📋" }),
       el("span", { class: "label", text: T.overview }),
     ]));
-    sb.appendChild(el("div", { class: "section-title", text: T.files + " (" + DATA.files.length + ")" }));
+    const sectionTitle = el("div", { class: "section-title", text: T.files + " (" + DATA.files.length + ")" });
+    sb.appendChild(sectionTitle);
+
+    const items = [];
     DATA.files.forEach((f, idx) => {
       const slash = f.path.lastIndexOf("/");
       const dir = slash >= 0 ? f.path.slice(0, slash + 1) : "";
       const base = slash >= 0 ? f.path.slice(slash + 1) : f.path;
-      sb.appendChild(el("div", { class: "nav-item", "data-idx": String(idx), onclick: () => selectFile(idx) }, [
+      const countBadge = el("span", { class: "match-count" });
+      const item = el("div", { class: "nav-item", "data-idx": String(idx), onclick: () => selectFile(idx) }, [
         el("span", { class: "chip " + f.status, text: f.status[0].toUpperCase() }),
         el("span", { class: "label" }, [
           dir ? el("span", { class: "path-dir", text: dir }) : null,
           document.createTextNode(base),
         ]),
+        countBadge,
         el("span", { class: "nstat" }, [
           el("span", { class: "add", text: "+" + (f.insertions || 0) }),
           document.createTextNode(" "),
           el("span", { class: "del", text: "−" + (f.deletions || 0) }),
         ]),
-      ]));
+      ]);
+      items.push({ item, countBadge });
+      sb.appendChild(item);
     });
+
+    // filter: show a file if its path or any diff line matches; badge = hits.
+    function applyFilter() {
+      const q = search.value.trim().toLowerCase();
+      let shown = 0;
+      items.forEach(({ item, countBadge }, idx) => {
+        if (!q) {
+          item.style.display = "";
+          countBadge.textContent = "";
+          shown++;
+          return;
+        }
+        let from = 0, hits = 0;
+        const hay = haystacks[idx];
+        while ((from = hay.indexOf(q, from)) !== -1) { hits++; from += q.length; }
+        if (hits > 0) { item.style.display = ""; countBadge.textContent = String(hits); shown++; }
+        else { item.style.display = "none"; countBadge.textContent = ""; }
+      });
+      sectionTitle.textContent = q ? `${T.files} (${shown}/${DATA.files.length})` : `${T.files} (${DATA.files.length})`;
+    }
+    search.addEventListener("input", applyFilter);
   }
 
   // ---------- topbar controls ----------

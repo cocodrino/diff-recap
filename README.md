@@ -1,86 +1,111 @@
-# diff-recap
+# 📊 diff-recap
 
-Turn any git diff into a **single self-contained, fully-local** interactive
-recap: architecture diagram, annotated side-by-side diffs, and per-file /
-per-hunk AI explanations of **why** the code changed. No external service, no
-server, no CDN — the output is one `recap.html` that opens offline via
-`file://`.
+**Understand any code change at a glance — fully offline.**
 
-## Demo
+`diff-recap` turns a git diff into one self-contained, interactive `recap.html`:
+architecture diagrams, side-by-side diffs, and AI explanations of *why* the code
+changed. No external service, no server, no sign-in — just open the file in your
+browser. Even on a plane. ✈️
 
-Overview — exhaustive summary, architecture diagram, commits, changed-file grid:
+> 💡 **Heads up:** it reads a **git diff**, so your changes need to be tracked by
+> git (committed, or staged/modified on already-tracked files). Brand-new files
+> you have never `git add`ed won't show up — stage them first.
 
-![Recap overview](images/recap-overview.png)
+---
 
-Per-file detail — the AI "why this file changed" note and per-hunk explanations
-above a side-by-side diff:
+## ✨ What you get
 
-![File detail](images/recap-file-detail.png)
+### 1. 🗺️ Diagrams that explain the change
 
-It also localizes to the language you talk to the agent in, and asks which model
-to run with before delegating the work to a sub-agent:
+Each recap includes a Mermaid diagram of the architecture or data flow, so you
+grasp the shape of the change *before* reading a single line.
 
-![Model selector](images/model-selector-en.png)
+![Architecture diagram](images/mermaid-diagram.png)
 
-## Why
+### 2. 🧠 AI explanations for the tricky parts
 
-`visual-recap` (and even its "local-files mode") still depends on the
-`@agent-native/core` package and the hosted Plan UI reading through a localhost
-bridge — your code shape leaves the machine and the viewer is not yours.
-`diff-recap` produces one HTML file that contains everything (viewer + Mermaid
-engine + data) and opens in any browser, offline.
+Hard-to-follow code gets a **Complex** badge and an expandable, step-by-step
+walkthrough — so dense logic stops being a wall of text.
 
-Design highlights:
+![Complex block explanation](images/complex-explanation.png)
 
-- **Facts vs. prose are separated.** The diff, paths, and lines are extracted
-  mechanically from git (true by construction); the AI only writes the "why".
-- **Zero runtime dependencies.** Pure Node + git. No `npm install`.
-- **Self-contained output.** ~3 MB HTML (mostly the inlined Mermaid engine).
+### 3. 🔍 Search across files and code
 
-## How it works
+Type a keyword and the sidebar instantly filters files by path **and** by diff
+content, showing how many matches each file has.
 
-```
-1. scripts/collect.mjs   git range  ──▶  recap-data.json   (facts, true by construction)
-2. the sub-agent authors analysis   ──▶  analysis.json     (summary, diagram, WHY per file/hunk)
-3. scripts/generate.mjs  merge       ──▶  recap.html        (one self-contained file)
-```
+![File search](images/file-search.png)
 
-Everything for a recap lands together in `<repo-root>/.recap/<branch>/`.
+### 4. 📝 A plain-English summary per file
 
-## Install
+Every changed file tells you what it does and why it changed — no guessing.
 
-It is a Claude Code (and compatible) Agent Skill. Clone it into your skills
-directory:
+![Per-file summary](images/file-summary.png)
+
+### …and the rest
+
+A full overview (summary + diagram + commits + file grid), word-level diff
+highlighting, split/unified toggle, light/dark theme, English & Spanish UI, and
+shareable deep links (`recap.html#file/2`).
+
+![Overview](images/recap-overview.png)
+
+---
+
+## 🚀 Install (30 seconds)
+
+It's a Claude Code (and compatible) Agent Skill — no `npm install`, no build.
 
 ```bash
-# personal skill — available everywhere
+# available everywhere
 git clone git@github.com:cocodrino/diff-recap.git ~/.claude/skills/diff-recap
-
-# or as a project skill — travels with one repo
-git clone git@github.com:cocodrino/diff-recap.git .claude/skills/diff-recap
 ```
 
-Restart the agent so it picks up the skill, then run `/diff-recap` inside the
-repo you want to recap.
+Restart your agent, then run `/diff-recap` inside any git repo. It asks which
+model to use, then builds the recap for you.
 
-## Manual usage (without the skill runner)
+Prefer it scoped to one project? Clone into `.claude/skills/diff-recap` instead.
+
+---
+
+## 🤔 Why not just use `visual-recap`?
+
+`visual-recap` (even its "local-files mode") still talks to the
+`@agent-native/core` package and a hosted viewer through a localhost bridge —
+your code shape leaves the machine and the viewer isn't yours.
+
+`diff-recap` is the opposite: **one HTML file with everything inside** (viewer +
+diagram engine + data), opening in any browser, offline.
+
+- 🔒 **Private** — nothing leaves your machine.
+- 🪶 **Zero dependencies** — pure Node + git.
+- 📦 **Self-contained** — a single ~3 MB HTML you can email or archive.
+- ✅ **Trustworthy** — the diff and lines come straight from git; the AI only
+  writes the explanations.
+
+---
+
+## 🛠️ How it works
+
+```
+1. collect.mjs   git diff   ──▶  recap-data.json   (the facts, straight from git)
+2. the AI writes analysis   ──▶  analysis.json     (summary, diagram, the "why")
+3. generate.mjs  merge       ──▶  recap.html        (one self-contained file)
+```
+
+Everything lands together in `<repo-root>/.recap/<branch>/`.
+
+### Manual usage (without the skill)
 
 ```bash
-# inside the repo you want to recap
+# inside the repo you want to recap (changes must be committed/tracked)
 node /path/to/diff-recap/scripts/collect.mjs --base main --head HEAD
-# ...author .recap/<branch>/analysis.json (see SKILL.md for the schema)...
+# ...author .recap/<branch>/analysis.json (schema is in SKILL.md)...
 node /path/to/diff-recap/scripts/generate.mjs --open
 ```
 
-## Layout
+---
 
-- `SKILL.md` — agent instructions (the entry point when invoked as a skill).
-- `scripts/collect.mjs` — extracts the diff into deterministic `recap-data.json`.
-- `scripts/generate.mjs` — inlines the viewer + Mermaid + data into `recap.html`.
-- `scripts/paths.mjs` — resolves the per-branch `.recap/<branch>/` output dir.
-- `assets/viewer.css`, `assets/viewer.js` — the embedded viewer (vanilla, no deps, i18n).
-- `assets/mermaid.min.js` — vendored Mermaid for offline diagram rendering.
+## 📋 Requirements
 
-## Requirements
-
-Node.js and `git`. Run inside a git repository.
+Node.js and `git`. Run it inside a git repository — that's it.

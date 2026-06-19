@@ -103,6 +103,14 @@ automatically.
 renamed), per-file insertions/deletions, parsed hunks with before/after lines,
 and the commits in range. **Never edit this file** — it is the source of truth.
 
+**Tracked files only.** This is a `git diff`, so it only sees changes git
+tracks: committed changes between the two refs, or — with `--working` —
+uncommitted edits to already-tracked files. Brand-new files that have never been
+`git add`ed do NOT show up. If `collect.mjs` reports 0 files or a file the user
+expected is missing, the likely cause is untracked/unstaged work — tell the user
+to `git add` (or commit) those files and re-run. Do not try to recap untracked
+files by reading them directly; keep the recap grounded in the real diff.
+
 ### 2. Read the facts and author `analysis.json`
 
 Read `recap-data.json` and write `analysis.json` next to it (same
@@ -153,6 +161,17 @@ Authoring guidance:
 - **One diagram that adds insight.** A Mermaid flow/sequence/ER diagram of the
   architecture or data flow the change produces — not a restatement of the file
   list. Skip it only when the change has no structural story.
+  - **Mermaid must not throw "Syntax error" (renderer is Mermaid v11+).** In
+    `overview.diagram`, follow these rules:
+    - ALWAYS double-quote EVERY node label and EVERY edge label:
+      `A["Label text"]` and `B -->|"edge text"| C`.
+    - For line breaks inside a label, use the literal `<br/>` tag INSIDE the
+      quotes. NEVER emit a raw `\n` (backslash-n) inside the diagram — Mermaid 11
+      does not interpret it and the parse fails.
+    - Keep special characters (`@`, `+`, `/`, `.`, parentheses) INSIDE quoted
+      labels, or omit them. Unquoted special chars break the parser.
+    - Every node id must be a bare identifier; every label must be quoted.
+    - Golden rule: in Mermaid 11, always quote, and never use `\n`.
 - **Per-file `purpose`** for every meaningful file: why it exists in this change.
 - **Per-hunk explanations** keyed by the hunk's array index (`"0"`, `"1"`, …) as
   ordered in `recap-data.json`. You do not need one per hunk — annotate the
