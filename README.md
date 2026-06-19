@@ -68,14 +68,12 @@ Prefer it scoped to one project? Clone into `.claude/skills/diff-recap` instead.
 
 ---
 
-## 🤔 Why not just use `visual-recap`?
+## 🤔 Why diff-recap?
 
-`visual-recap` (even its "local-files mode") still talks to the
-`@agent-native/core` package and a hosted viewer through a localhost bridge —
-your code shape leaves the machine and the viewer isn't yours.
-
-`diff-recap` is the opposite: **one HTML file with everything inside** (viewer +
-diagram engine + data), opening in any browser, offline.
+Most diff viewers either need a server, a hosted account, or send your code
+somewhere else to render it. `diff-recap` is the opposite: **one HTML file with
+everything inside** (viewer + diagram engine + data), opening in any browser,
+offline.
 
 - 🔒 **Private** — nothing leaves your machine.
 - 🪶 **Zero dependencies** — pure Node + git.
