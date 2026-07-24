@@ -137,14 +137,18 @@ Schema (all fields optional except where noted — omit what does not apply):
     "diagramTitle": "Architecture / data-flow after the change",
     "diagram": "Mermaid source (flowchart/sequenceDiagram/erDiagram/etc.) of the architecture or flow the diff produces"
   },
+  "flow": {
+    "title": "Code flow",
+    "diagram": "Mermaid flowchart tracing the runtime path through functions, with file:line labels on each step (see 'Code-flow diagram' below)"
+  },
   "files": {
     "<exact path from recap-data.json>": {
       "purpose": "Markdown. What role this file plays in the change and why it changed.",
       "hunks": {
-        "0": "Simple block → a one-line Markdown string. What this hunk does and WHY.",
+        "0": "Simple block → a one-line Markdown string: WHY this hunk was made.",
         "1": {
-          "note": "One-line intent, always shown above the diff.",
-          "detail": "Markdown. EXTENSIVE, plain-language walkthrough for a hard-to-understand block: what each step does, why it works, gotchas. Use lists / ### sub-headings.",
+          "note": "One-line intent (WHY the change was made), always shown above the diff.",
+          "detail": "Markdown. Explains a tricky detail: WHY it is implemented this way — the edge case, constraint, or gotcha that forced it. Use lists / ### sub-headings.",
           "complexity": "high"
         }
       }
@@ -162,7 +166,7 @@ Authoring guidance:
   architecture or data flow the change produces — not a restatement of the file
   list. Skip it only when the change has no structural story.
   - **Mermaid must not throw "Syntax error" (renderer is Mermaid v11+).** In
-    `overview.diagram`, follow these rules:
+    EVERY diagram (`overview.diagram` and `flow.diagram`), follow these rules:
     - ALWAYS double-quote EVERY node label and EVERY edge label:
       `A["Label text"]` and `B -->|"edge text"| C`.
     - For line breaks inside a label, use the literal `<br/>` tag INSIDE the
@@ -172,20 +176,39 @@ Authoring guidance:
       labels, or omit them. Unquoted special chars break the parser.
     - Every node id must be a bare identifier; every label must be quoted.
     - Golden rule: in Mermaid 11, always quote, and never use `\n`.
+- **Code-flow diagram (`flow.diagram`).** In ADDITION to the architecture
+  diagram, add a Mermaid `flowchart` that traces how the code actually RUNS
+  through the change — the execution/data path, step by step, anchored to real
+  `file:line` locations. Each node is a function or step labeled with what it
+  does AND its `path:line`; each edge says what is passed to the next step. Read
+  the diff (and, when needed, the surrounding tracked code) to follow the real
+  call chain. Example shape for "generate 10 URLs, fetch each, collect images":
+  ```
+  flowchart TD
+    A["buildUrls() — makes 10 page URLs<br/>generate_url.ts:20"] -->|"each url"| B["fetchPage(url)<br/>fetch_api.ts:45"]
+    B -->|"HTML response"| C["parseImages(html)<br/>parser.ts:12"]
+    C -->|"image list"| D["collect + return<br/>index.ts:88"]
+  ```
+  Ground every `file:line` in the real diff/code — never invent a line number.
+  Put the label text and the `file:line` INSIDE the quotes (Mermaid 11 rules
+  above). Skip the flow diagram only when the change has no meaningful runtime
+  path (pure config/rename/docs).
 - **Per-file `purpose`** for every meaningful file: why it exists in this change.
-- **Per-hunk explanations** keyed by the hunk's array index (`"0"`, `"1"`, …) as
-  ordered in `recap-data.json`. You do not need one per hunk — annotate the
-  load-bearing ones. This is the headline feature: the reviewer reads intent
-  before code.
-- **Hard blocks get an extensive explanation.** When a hunk's code is
-  non-obvious — clever algorithms, regex, bit manipulation, async/concurrency
-  edge cases, framework "magic", dense one-liners, non-trivial data transforms —
-  use the object form `{ note, detail, complexity: "high" }`. The `detail` is a
-  thorough, plain-language walkthrough so a reader who does not know the codebase
-  understands exactly what the block does and why it works (step the logic,
-  name the gotchas). It renders as an expandable "Detailed explanation" (open by
-  default for `complexity: "high"`) and the hunk gets a "Complex" badge. For
-  genuinely simple hunks, keep the one-line string — do not pad obvious code.
+- **Comment EVERY hunk**, keyed by the hunk's array index (`"0"`, `"1"`, …) as
+  ordered in `recap-data.json`. Do not cherry-pick only the load-bearing hunks —
+  every hunk gets at least a one-line `note` answering **why the change was
+  made** (the intent, not a restatement of the code). This is the headline
+  feature: the reviewer reads intent before code, on every hunk.
+- **Tricky hunks also get the "why it's like this".** When a hunk has a
+  non-obvious detail — clever algorithms, regex, bit manipulation,
+  async/concurrency edge cases, framework "magic", dense one-liners, a workaround
+  for a constraint or bug — use the object form `{ note, detail, complexity:
+  "high" }`. The `detail` explains **why it is implemented that way**: the edge
+  case, constraint, or gotcha that forced this shape, in plain language a reader
+  who does not know the codebase can follow. It renders as an expandable
+  "Detailed explanation" (open by default for `complexity: "high"`) and the hunk
+  gets a "Complex" badge. Simple hunks keep just the one-line `note` — the note
+  is still required, but do not pad obvious code with a `detail`.
 - **Security:** never transcribe secrets (API keys, tokens, `.env` values) into
   prose. Redact (`sk-•••`).
 

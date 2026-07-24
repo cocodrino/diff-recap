@@ -16,7 +16,7 @@
     en: {
       overview: "Overview", files: "Files", commits: "Commits",
       changedFiles: "Changed files", whyFile: "Why this file changed", ai: "AI",
-      complex: "Complex", detailed: "Detailed explanation",
+      complex: "Complex", detailed: "Detailed explanation", codeFlow: "Code flow",
       searchPlaceholder: "Search files & code…",
       filesCount: "files", split: "Split", unified: "Unified",
       noChanges: "No changes found in this range.",
@@ -28,7 +28,7 @@
     es: {
       overview: "Resumen", files: "Archivos", commits: "Commits",
       changedFiles: "Archivos modificados", whyFile: "Por qué cambió este archivo", ai: "IA",
-      complex: "Complejo", detailed: "Explicación detallada",
+      complex: "Complejo", detailed: "Explicación detallada", codeFlow: "Flujo del código",
       searchPlaceholder: "Buscar archivos y código…",
       filesCount: "archivos", split: "Lado a lado", unified: "Unificado",
       noChanges: "No se encontraron cambios en este rango.",
@@ -216,6 +216,17 @@
     c.scrollTop = 0;
   }
 
+  // Render one Mermaid diagram card (title optional). No-op if empty/unavailable.
+  function renderDiagram(view, title, source) {
+    if (!source || !window.mermaid) return;
+    const card = el("div", { class: "diagram-card" });
+    if (title) card.appendChild(el("h3", { text: title }));
+    const holder = el("div", { class: "mermaid", text: source });
+    card.appendChild(holder);
+    view.appendChild(card);
+    try { window.mermaid.run({ nodes: [holder] }); } catch (e) { holder.textContent = "Diagram error: " + e.message; }
+  }
+
   function renderOverview() {
     current = -1;
     if (location.hash) history.replaceState(null, "", location.pathname + location.search);
@@ -225,15 +236,9 @@
     if (analysis.summary) prose.appendChild(el("div", { html: md(analysis.summary) }));
     view.appendChild(prose);
 
-    // architecture diagram
-    if (analysis.overview && analysis.overview.diagram && window.mermaid) {
-      const card = el("div", { class: "diagram-card" });
-      if (analysis.overview.diagramTitle) card.appendChild(el("h3", { text: analysis.overview.diagramTitle }));
-      const holder = el("div", { class: "mermaid", text: analysis.overview.diagram });
-      card.appendChild(holder);
-      view.appendChild(card);
-      try { window.mermaid.run({ nodes: [holder] }); } catch (e) { holder.textContent = "Diagram error: " + e.message; }
-    }
+    // architecture diagram, then the code-flow diagram (both optional)
+    if (analysis.overview) renderDiagram(view, analysis.overview.diagramTitle, analysis.overview.diagram);
+    if (analysis.flow) renderDiagram(view, analysis.flow.title || T.codeFlow, analysis.flow.diagram);
 
     // commits
     if (DATA.commits && DATA.commits.length) {

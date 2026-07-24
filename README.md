@@ -17,8 +17,11 @@ browser. Even on a plane. ✈️
 
 ### 1. 🗺️ Diagrams that explain the change
 
-Each recap includes a Mermaid diagram of the architecture or data flow, so you
-grasp the shape of the change *before* reading a single line.
+Each recap includes a Mermaid **architecture** diagram *and* a **code-flow**
+diagram that traces how execution moves through the change — step by step,
+anchored to real `file:line` locations (e.g. `buildUrls() generate_url.ts:20` →
+`fetchPage() fetch_api.ts:45` → …) — so you grasp the shape of the change
+*before* reading a single line.
 
 ![Architecture diagram](images/mermaid-diagram.png)
 
