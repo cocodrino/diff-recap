@@ -11,12 +11,14 @@
 //   --analysis  AI analysis file (optional).    Default: analysis.json
 //   --out       Output HTML.                    Default: recap.html
 //   --open      Open the result in the default browser when done.
+//   --allow-incomplete  Write the HTML even when validate.mjs reports errors (drafts only).
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { execFile } from "node:child_process";
 import path from "node:path";
 import { recapDir } from "./paths.mjs";
+import { validateAnalysis, report } from "./validate.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ASSETS = path.resolve(__dirname, "..", "assets");
@@ -33,6 +35,7 @@ function parseArgs(argv) {
     else if (k === "--analysis") a.analysis = argv[++i];
     else if (k === "--out") a.out = argv[++i];
     else if (k === "--open") a.open = true;
+    else if (k === "--allow-incomplete") a.allowIncomplete = true;
     else if (k === "--help" || k === "-h") a.help = true;
   }
   return a;
@@ -86,6 +89,14 @@ function main() {
     process.exit(1);
   }
   const analysis = readJSON(analysisPath, {});
+
+  // An incomplete analysis renders quietly wrong (unlinked bullets, files with no
+  // "what it does" column), so it is refused here unless explicitly allowed.
+  const ok = report(validateAnalysis(data, analysis));
+  if (!ok && !args.allowIncomplete) {
+    console.error("Not writing recap.html. Pass --allow-incomplete only for a draft you will finish.");
+    process.exit(1);
+  }
   data.analysis = analysis;
   const lang = (analysis.lang || "en").replace(/[^a-zA-Z-]/g, "") || "en";
 

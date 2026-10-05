@@ -59,16 +59,18 @@ Launch ONE sub-agent (in Claude Code, the `Agent` / Task tool with the chosen
 When the sub-agent returns, report that `recap.html` path to the user. That path
 IS the deliverable.
 
-## How It Works — Three Stages
+## How It Works — Four Stages
 
 The pipeline cleanly separates **facts** (extracted mechanically from git) from
 **explanation** (written by the sub-agent). Facts are true by construction;
-prose is the only thing the sub-agent authors.
+prose is the only thing the sub-agent authors, and it is checked against the
+facts before anything is rendered.
 
 ```
-1. collect.mjs   git range  ──▶  recap-data.json   (facts: files, hunks, stats, commits)
-2. SUB-AGENT     analyze     ──▶  analysis.json     (summary, diagram, per-file & per-hunk WHY)
-3. generate.mjs  merge       ──▶  recap.html        (one self-contained file)  ──▶ open
+1. collect.mjs   git range  ──▶  recap-data.json   (facts: files, hunks, full files, stats, commits)
+2. SUB-AGENT     analyze     ──▶  analysis.json     (changes, flow, steps, per-file & per-hunk WHY)
+3. validate.mjs  check       ──▶  0 errors          (every reference real, every changed line explained)
+4. generate.mjs  merge       ──▶  recap.html        (one self-contained file)  ──▶ open
 ```
 
 ## Recap Procedure (sub-agent)
@@ -101,7 +103,9 @@ automatically.
 
 `recap-data.json` holds the facts: real paths, statuses (added/modified/removed/
 renamed), per-file insertions/deletions, parsed hunks with before/after lines,
-and the commits in range. **Never edit this file** — it is the source of truth.
+the full NEW content of each changed file (`fullLines`, capped at 5000 lines —
+longer files get `fullTruncated: true`), and the commits in range. **Never edit
+this file** — it is the source of truth.
 
 **Tracked files only.** This is a `git diff`, so it only sees changes git
 tracks: committed changes between the two refs, or — with `--working` —
@@ -133,17 +137,38 @@ Schema (all fields optional except where noted — omit what does not apply):
   "lang": "es",
   "title": "Short outcome-focused title (≤70 chars)",
   "summary": "Markdown. EXHAUSTIVE: what changed, why it matters, compatibility/risk, decisions. Use ## headings, lists, `code`, **bold**, > quotes.",
+  "changes": {
+    "problem": "Markdown. The concrete problem the change addresses, in plain words (what went wrong, to whom, with real numbers when the diff or PR gives them).",
+    "points": [
+      {
+        "title": "Plain-language name of this part of the change (e.g. 'The send to the bank')",
+        "file": "<exact path from recap-data.json>",
+        "hunk": 0,
+        "bullets": [
+          { "text": "Markdown. ONE idea: what this part now does, consequence first.", "hunk": 4, "lines": [3311, 3317] },
+          { "text": "Another idea, in another file of the same point.", "file": "<exact path>", "hunk": 0 },
+          "A bullet with no code behind it (a plain string) is not clickable."
+        ]
+      }
+    ],
+    "notCovered": ["Markdown. Something the change deliberately leaves out, and where it is handled instead."]
+  },
   "overview": {
     "diagramTitle": "Architecture / data-flow after the change",
-    "diagram": "Mermaid source (flowchart/sequenceDiagram/erDiagram/etc.) of the architecture or flow the diff produces"
+    "diagram": "Mermaid source (flowchart/sequenceDiagram/erDiagram/etc.) of the architecture or flow the diff produces",
+    "links": { "<node id>": { "file": "<exact path>", "hunk": 0 } }
   },
   "flow": {
     "title": "Code flow",
-    "diagram": "Mermaid flowchart tracing the runtime path through functions, with file:line labels on each step (see 'Code-flow diagram' below)"
+    "diagram": "Mermaid flowchart tracing the runtime path through functions, with file:line labels on each step (see 'Code-flow diagram' below)",
+    "links": { "<node id>": { "file": "<exact path>", "hunk": 0 } }
   },
   "files": {
     "<exact path from recap-data.json>": {
       "purpose": "Markdown. What role this file plays in the change and why it changed.",
+      "steps": [
+        { "from": 3311, "to": 3317, "text": "Markdown. What this stretch of code ACHIEVES, in plain words (e.g. 'Sets this charge attempt aside; if it was already set aside, does not call the bank again')." }
+      ],
       "hunks": {
         "0": "Simple block → a one-line Markdown string: WHY this hunk was made.",
         "1": {
@@ -193,6 +218,57 @@ Authoring guidance:
   Put the label text and the `file:line` INSIDE the quotes (Mermaid 11 rules
   above). Skip the flow diagram only when the change has no meaningful runtime
   path (pure config/rename/docs).
+- **"What changes" (`changes`) — the reviewer's map of the change, in plain words.**
+  It answers "what does this change do, part by part" for someone who has not
+  opened the code. Every point and bullet is CLICKABLE: it opens a modal on the
+  exact hunk, with a button to see the whole file. Write it like this:
+  - `problem`: the concrete failure or need, with real facts (who, what, how
+    many) — never "improves robustness".
+  - `points`: one per part of the change, numbered by the viewer, ordered the way
+    data moves through the system (entry point first). `title` is a plain name
+    ("The send to the bank"), not a symbol; `file` + `hunk` is where clicking the
+    title lands.
+  - `bullets`: ONE idea each, consequence before mechanism ("If the step repeats,
+    it reuses the recorded answer and does not charge again"), with the symbol in
+    `code` only after the plain sentence. Nest the decision branches of a rule as
+    separate bullets rather than one long sentence. Each bullet that describes
+    code carries `hunk` (and `file` when it is not the point's file).
+  - `notCovered`: what the change deliberately leaves out and where that lives
+    instead. Omit it only when nothing was left out.
+  - **`lines: [from, to]` on every bullet that talks about part of a hunk.** Two
+    bullets about different lines of the same hunk must NOT open the same view:
+    `lines` narrows the modal to the code the sentence describes — those lines stay
+    bright and the rest of the hunk is dimmed — and scrolls to them. Numbers are
+    NEW-file line numbers (the `newNum` of the lines in `recap-data.json`, the ones
+    the diff gutter shows) and must fall inside the referenced hunk. Points and
+    `flow.links` / `overview.links` entries accept `lines` too.
+  - **Every `file` must be an exact path from `recap-data.json` and every `hunk`
+    a real index of that file's `hunks` array.** A reference that does not
+    resolve renders as plain text and logs a console warning — it never guesses.
+    Re-read `recap-data.json` to pick the hunk; do not estimate it from line
+    numbers you remember.
+- **Clickable flow (`flow.links`, also `overview.links`).** Map each diagram node
+  id to the hunk that implements that step: `{ "B": { "file": "…", "hunk": 3 } }`.
+  Clicking the node opens the same modal as "What changes". Link every node that
+  corresponds to changed code; leave unchanged steps (context the flow passes
+  through) unlinked rather than pointing them at an unrelated hunk. Node ids must
+  be the bare ids used in the Mermaid source (`B`, not `B["label"]`).
+- **Plain-language steps (`files[path].steps`) — the "what it does" column.** For
+  every meaningful changed file, cut its CHANGED code into steps of a few lines
+  (typically 3-15) and say what each one achieves. The viewer renders them as a
+  column beside the code, each cell spanning the rows it explains — in the diff,
+  in the modal and in the whole-file view.
+  - Abstraction level is the whole point: write what the code ACHIEVES for the
+    business or the system, not what it does mechanically. "Checks whether any of
+    these users is banned" — never "loops over users checking `permission ===
+    false`". "Writes down the bank's answer before moving on" — never "calls
+    settleChargeSend with the response".
+  - One idea per step, a sentence or two. A symbol in `code` only when the reader
+    needs it to recognise the step.
+  - `from` / `to` are NEW-file line numbers (`newNum`). Cover the added and
+    modified code; context lines may be included when they belong to the step.
+    Steps must not overlap. Leave trivial lines (imports, closing braces) out.
+  - Skip `steps` for test files, generated files and pure renames.
 - **Per-file `purpose`** for every meaningful file: why it exists in this change.
 - **Comment EVERY hunk**, keyed by the hunk's array index (`"0"`, `"1"`, …) as
   ordered in `recap-data.json`. Do not cherry-pick only the load-bearing hunks —
@@ -212,7 +288,32 @@ Authoring guidance:
 - **Security:** never transcribe secrets (API keys, tokens, `.env` values) into
   prose. Redact (`sk-•••`).
 
-### 3. Generate and open the recap
+### 3. Validate until it is clean — mandatory
+
+```bash
+node <skill-dir>/scripts/validate.mjs
+```
+
+It checks `analysis.json` against `recap-data.json` and exits 1 on any error:
+
+- every point, bullet and diagram link points at a real file and hunk, and its
+  `lines` fall inside that hunk;
+- every changed non-test file has `steps`, and **every changed line that needs
+  explaining is inside a step** (blank lines, lone punctuation, comments and
+  imports are exempt). A generated file may be exempted only explicitly, with
+  `"stepsSkip": "<reason>"`;
+- steps do not overlap and have text.
+
+Warnings (two bullets opening the same hunk with no `lines`, a step that covers
+no changed line) are not fatal but almost always mean a wrong number — fix them.
+
+**Fix and re-run until it reports 0 errors.** `generate.mjs` runs the same
+checks and refuses to write `recap.html` while any error remains; do not reach
+for `--allow-incomplete` to get past it — that flag is for a draft the user
+explicitly asked for. A recap with a file the reader cannot follow in plain
+words is the exact defect this step exists to stop.
+
+### 4. Generate and open the recap
 
 ```bash
 node <skill-dir>/scripts/generate.mjs --open
@@ -228,8 +329,19 @@ user. That path IS the deliverable.
 
 ## What The Viewer Gives The Reviewer
 
-- **Overview**: the exhaustive summary, the architecture diagram, the commit
-  list, and a clickable grid of changed files.
+- **Overview**: the exhaustive summary, **What changes** (problem, numbered
+  points, what it does not cover), the **code flow** and architecture diagrams,
+  the commit list, and a clickable grid of changed files.
+- **"What it does" column**: beside the code, each step of the change explained
+  in plain words (`files[path].steps`). Clicking a step focuses its lines (the
+  rest of that diff and the other steps recede); clicking it again clears it.
+- **Change modal**: clicking a point, a bullet, or a linked diagram node opens a
+  modal focused on that hunk (with its AI note) as a one-column diff — when the
+  reference carries `lines`, only those lines stay bright and the rest of the
+  hunk is dimmed — a "Show the whole file" toggle
+  that renders the new version with changed lines marked and scrolls to the
+  hunk, and a jump to the file view. Close with ✕, Esc, or a click outside.
+  Files over 5000 lines keep only the hunk (`fullTruncated` in the data).
 - **Per-file detail** (click a file or open `recap.html#file/<n>`): the file's
   status, the AI "why this file changed" note, then each hunk with its AI
   annotation above a **side-by-side diff** (old vs. new, line-numbered).

@@ -9,6 +9,8 @@
   const DATA = window.__RECAP__ || { meta: {}, stats: {}, commits: [], files: [], analysis: {} };
   const analysis = DATA.analysis || {};
   const analysisFiles = analysis.files || {};
+  // The analysis references files by path; the viewer addresses them by index.
+  const fileIndexByPath = new Map(DATA.files.map((f, i) => [f.path, i]));
 
   // ---------- i18n: chrome labels follow analysis.lang (AI prose is already
   // authored in that language). Unknown langs fall back to English chrome. ----------
@@ -24,6 +26,15 @@
       noHunks: "No textual hunks (mode/metadata change only).",
       renamedFrom: "renamed from", toggleDiff: "Toggle split / unified diff",
       toggleTheme: "Toggle light / dark",
+      whatChanges: "What changes", problem: "The problem it addresses",
+      notCovered: "Not covered", flowHint: "Click a step to see the change behind it.",
+      showFullFile: "Show the whole file", showChangeOnly: "Show only the change",
+      openFileView: "Open in file view", close: "Close",
+      fullTruncated: "File too long to show whole — only the change is shown.",
+      fullUnavailable: "The whole file is not available for this change.",
+      fullNote: "New version of the file. Changed lines are marked; removed lines are in the diff above.",
+      changeOf: "change",
+      stepHint: "Click to focus this step; click again to clear.",
     },
     es: {
       overview: "Resumen", files: "Archivos", commits: "Commits",
@@ -36,6 +47,15 @@
       noHunks: "Sin cambios de texto (solo cambió el modo/metadata).",
       renamedFrom: "renombrado de", toggleDiff: "Alternar lado a lado / unificado",
       toggleTheme: "Alternar claro / oscuro",
+      whatChanges: "Qué cambia", problem: "El problema que ataca",
+      notCovered: "Lo que no cubre", flowHint: "Haz clic en un paso para ver el cambio que lo hace.",
+      showFullFile: "Ver el archivo completo", showChangeOnly: "Ver solo el cambio",
+      openFileView: "Abrir en la vista del archivo", close: "Cerrar",
+      fullTruncated: "El archivo es demasiado largo para mostrarlo entero: se muestra solo el cambio.",
+      fullUnavailable: "El archivo completo no está disponible para este cambio.",
+      fullNote: "Versión nueva del archivo. Las líneas cambiadas están marcadas; las borradas se ven en el diff de arriba.",
+      changeOf: "cambio",
+      stepHint: "Haz clic para enfocar este paso; otro clic lo quita.",
     },
   };
   const langBase = String(analysis.lang || "en").toLowerCase().split("-")[0];
@@ -158,17 +178,174 @@
     const sim = (2 * common) / (n + m || 1);
     return sim >= 0.3 ? { left, right } : null;
   }
-  // Fill a cell either with plain text, or with highlighted changed tokens.
-  function fillCell(cell, text, segments, wordClass) {
-    if (!segments) { cell.textContent = text; return; }
+  // ---------- syntax highlighting (built in: the recap must stay self-contained) ----------
+  // A line-level tokenizer, good enough to make code readable: comments, strings,
+  // numbers, keywords, types and calls. It never parses, so a construct spanning
+  // lines (a template literal, a block comment's middle line not starting with
+  // "*") stays plain rather than being guessed. Code is still written with
+  // textContent — highlighting only wraps tokens in spans.
+  const HASH_COMMENT_LANGS = new Set(["python", "ruby", "bash", "yaml", "toml", "dockerfile", "makefile"]);
+  const NO_HIGHLIGHT_LANGS = new Set(["plaintext", "markdown"]);
+  const KEYWORDS = new Set((
+    "abstract as async await break case catch class const continue debugger declare default delete do " +
+    "else enum export extends false finally for from function get if implements import in infer instanceof " +
+    "interface is keyof let namespace new null of private protected public readonly return satisfies set " +
+    "static super switch this throw true try type typeof undefined var void while with yield " +
+    "def elif except lambda None True False pass raise self fn impl mut pub use struct trait match " +
+    "func go defer chan package select string number boolean any unknown never object bigint symbol"
+  ).split(" "));
+  const SQL_KEYWORDS = new Set((
+    "select from where and or not null is in as join left right inner outer on group by order having " +
+    "limit offset insert into values update set delete returning create table alter add drop index " +
+    "case when then else end exists distinct coalesce"
+  ).split(" "));
+
+  function tokenRegex(lang) {
+    const comment = HASH_COMMENT_LANGS.has(lang) ? "#.*" : lang === "sql" ? "--.*" : "\\/\\/.*|\\/\\*.*?(?:\\*\\/|$)";
+    return new RegExp(
+      `(${comment})|("(?:[^"\\\\]|\\\\.)*"?|'(?:[^'\\\\]|\\\\.)*'?|\`(?:[^\`\\\\]|\\\\.)*\`?)` +
+        "|(\\b\\d[\\d_]*(?:\\.\\d+)?\\b)|([A-Za-z_$][\\w$]*)",
+      "g",
+    );
+  }
+  const regexByLang = new Map();
+
+  // True for the inside of a block/doc comment: " * text", "/**", "*/".
+  function isCommentLine(text, lang) {
+    if (HASH_COMMENT_LANGS.has(lang) || lang === "sql") return false;
+    const t = text.trimStart();
+    return t.startsWith("*") || t.startsWith("/*");
+  }
+
+  function appendHighlighted(parent, text, lang) {
+    if (NO_HIGHLIGHT_LANGS.has(lang)) { parent.appendChild(document.createTextNode(text)); return; }
+    let re = regexByLang.get(lang);
+    if (!re) { re = tokenRegex(lang); regexByLang.set(lang, re); }
+    re.lastIndex = 0;
+    let last = 0, m;
+    while ((m = re.exec(text))) {
+      if (m.index > last) parent.appendChild(document.createTextNode(text.slice(last, m.index)));
+      let cls;
+      if (m[1]) cls = "hl-com";
+      else if (m[2]) cls = "hl-str";
+      else if (m[3]) cls = "hl-num";
+      else {
+        const word = m[4];
+        const kw = lang === "sql" ? SQL_KEYWORDS.has(word.toLowerCase()) : KEYWORDS.has(word);
+        if (kw) cls = "hl-kw";
+        else if (/^[A-Z]/.test(word)) cls = "hl-type";
+        else if (text[re.lastIndex] === "(") cls = "hl-fn";
+      }
+      parent.appendChild(cls ? el("span", { class: cls, text: m[0] }) : document.createTextNode(m[0]));
+      last = re.lastIndex;
+      if (m[0] === "") re.lastIndex++;
+    }
+    if (last < text.length) parent.appendChild(document.createTextNode(text.slice(last)));
+  }
+
+  // One line of code into a cell: highlighted, and with the word-level diff on top
+  // when `segments` is given (changed tokens keep their stronger background).
+  function fillCode(cell, text, lang, segments, wordClass) {
+    if (isCommentLine(text, lang)) { cell.appendChild(el("span", { class: "hl-com", text })); return; }
+    if (!segments) { appendHighlighted(cell, text, lang); return; }
     for (const s of segments) {
-      if (s.c) cell.appendChild(el("span", { class: wordClass, text: s.t }));
-      else cell.appendChild(document.createTextNode(s.t));
+      if (s.c) {
+        const word = el("span", { class: wordClass });
+        appendHighlighted(word, s.t, lang);
+        cell.appendChild(word);
+      } else appendHighlighted(cell, s.t, lang);
     }
   }
 
-  function renderDiffSplit(hunk) {
+  // ---------- plain-language steps and focused lines ----------
+  // Both are keyed on NEW-file line numbers, the same numbers the diff gutter shows.
+
+  // A file's plain-language steps: [{ from, to, text }], invalid entries dropped.
+  function stepsFor(f) {
+    const raw = (analysisFiles[f.path] || {}).steps;
+    if (!Array.isArray(raw)) return [];
+    return raw.filter((s) => s && Number.isInteger(s.from) && Number.isInteger(s.to) && s.from <= s.to && s.text);
+  }
+
+  // The new-file line each rendered row stands for. A deleted line has none, so
+  // it takes the next row's (it was replaced by what follows), else the previous'.
+  function effectiveLines(newNums) {
+    return newNums.map((n, i) => {
+      if (n != null) return n;
+      for (let j = i + 1; j < newNums.length; j++) if (newNums[j] != null) return newNums[j];
+      for (let j = i - 1; j >= 0; j--) if (newNums[j] != null) return newNums[j];
+      return null;
+    });
+  }
+
+  // Dim every row outside `focus` ({ from, to }) and mark the ones inside.
+  // Returns the first focused row, to scroll to.
+  function applyFocus(rows, lines, focus) {
+    if (!focus) return null;
+    let first = null;
+    rows.forEach((tr, i) => {
+      const inside = lines[i] != null && lines[i] >= focus.from && lines[i] <= focus.to;
+      tr.classList.add(inside ? "focus-line" : "dim");
+      if (inside && !first) first = tr;
+    });
+    return first;
+  }
+
+  // Re-focus one code table on a step the reader picked, or clear the focus
+  // (`step` null): the step's rows and its cell stay bright, everything else in
+  // that table recedes.
+  function setTableFocus(table, step, activeCell) {
+    for (const tr of table._rows) tr.classList.remove("dim", "focus-line", "focus");
+    for (const td of table.querySelectorAll("td.step")) {
+      td.classList.toggle("step-active", td === activeCell);
+      td.classList.toggle("step-dim", Boolean(activeCell) && td !== activeCell);
+    }
+    applyFocus(table._rows, table._lines, step ? { from: step.from, to: step.to } : null);
+  }
+
+  // The "what it does" column: one cell per run of rows sharing a step, spanning
+  // those rows. Rows outside every step get an empty spanning cell so columns align.
+  // Clicking a step focuses its code in this table; clicking it again clears it.
+  function addStepColumn(table, rows, lines, steps) {
+    table._rows = rows;
+    table._lines = lines;
+    if (!steps.length) return;
+    const stepOf = lines.map((n) => (n == null ? null : steps.find((s) => n >= s.from && n <= s.to) || null));
+    for (let i = 0; i < rows.length; ) {
+      let j = i;
+      while (j + 1 < rows.length && stepOf[j + 1] === stepOf[i]) j++;
+      const s = stepOf[i];
+      const td = el("td", { class: "step" + (s ? "" : " step-empty"), rowspan: String(j - i + 1) });
+      if (s) {
+        td.innerHTML = md(s.text).replace(/^<p>|<\/p>$/g, "");
+        td.setAttribute("tabindex", "0");
+        td.setAttribute("role", "button");
+        td.title = T.stepHint;
+        const toggle = () => {
+          const active = td.classList.contains("step-active");
+          setTableFocus(table, active ? null : s, active ? null : td);
+        };
+        td.addEventListener("click", toggle);
+        td.addEventListener("keydown", (e) => {
+          if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(); }
+        });
+      }
+      rows[i].appendChild(td);
+      i = j + 1;
+    }
+  }
+
+  // Shared tail of every code table: steps column, focus, and the scroll anchor.
+  function finishCodeTable(table, rows, newNums, opts) {
+    const lines = effectiveLines(newNums);
+    addStepColumn(table, rows, lines, (opts && opts.steps) || []);
+    table._anchor = applyFocus(rows, lines, opts && opts.focus);
+    return table;
+  }
+
+  function renderDiffSplit(hunk, lang, opts) {
     const table = el("table", { class: "diff" });
+    const rows = [], newNums = [];
     for (const row of sideBySide(hunk.lines)) {
       const tr = el("tr");
       // A modified pair (both sides present, not context) gets a word-level diff.
@@ -177,31 +354,36 @@
       // left (old)
       const lg = el("td", { class: "gutter", text: row.left && row.left.oldNum != null ? String(row.left.oldNum) : "" });
       const lc = el("td", { class: "code split-cell" + (row.context ? "" : row.left ? " del" : " empty") });
-      fillCell(lc, row.left ? row.left.content : "", seg && seg.left, "word-del");
+      fillCode(lc, row.left ? row.left.content : "", lang, seg && seg.left, "word-del");
       tr.appendChild(lg); tr.appendChild(lc);
       tr.appendChild(el("td", { class: "split-divider" }));
       // right (new)
       const rg = el("td", { class: "gutter", text: row.right && row.right.newNum != null ? String(row.right.newNum) : "" });
       const rc = el("td", { class: "code split-cell" + (row.context ? "" : row.right ? " add" : " empty") });
-      fillCell(rc, row.right ? row.right.content : "", seg && seg.right, "word-add");
+      fillCode(rc, row.right ? row.right.content : "", lang, seg && seg.right, "word-add");
       tr.appendChild(rg); tr.appendChild(rc);
       table.appendChild(tr);
+      rows.push(tr);
+      newNums.push(row.right && row.right.newNum != null ? row.right.newNum : null);
     }
-    return table;
+    return finishCodeTable(table, rows, newNums, opts);
   }
 
-  function renderDiffUnified(hunk) {
+  function renderDiffUnified(hunk, lang, opts) {
     const table = el("table", { class: "diff" });
+    const rows = [], newNums = [];
     for (const l of hunk.lines) {
       const tr = el("tr", { class: l.type });
       tr.appendChild(el("td", { class: "gutter", text: l.oldNum != null ? String(l.oldNum) : "" }));
       tr.appendChild(el("td", { class: "gutter", text: l.newNum != null ? String(l.newNum) : "" }));
       const code = el("td", { class: "code" + (l.type === "add" ? " add" : l.type === "del" ? " del" : "") });
-      code.textContent = l.content;
+      fillCode(code, l.content, lang);
       tr.appendChild(code);
       table.appendChild(tr);
+      rows.push(tr);
+      newNums.push(l.newNum);
     }
-    return table;
+    return finishCodeTable(table, rows, newNums, opts);
   }
 
   let splitMode = true;
@@ -217,14 +399,47 @@
   }
 
   // Render one Mermaid diagram card (title optional). No-op if empty/unavailable.
-  function renderDiagram(view, title, source) {
+  // `links` maps a node id to a change ({ file, hunk }): those nodes open the
+  // change modal once Mermaid has drawn them.
+  function renderDiagram(view, title, source, links) {
     if (!source || !window.mermaid) return;
     const card = el("div", { class: "diagram-card" });
     if (title) card.appendChild(el("h3", { text: title }));
+    const hasLinks = links && Object.keys(links).length > 0;
+    if (hasLinks) card.appendChild(el("p", { class: "diagram-hint", text: T.flowHint }));
     const holder = el("div", { class: "mermaid", text: source });
     card.appendChild(holder);
     view.appendChild(card);
-    try { window.mermaid.run({ nodes: [holder] }); } catch (e) { holder.textContent = "Diagram error: " + e.message; }
+    try {
+      const drawn = window.mermaid.run({ nodes: [holder] });
+      if (hasLinks && drawn && typeof drawn.then === "function") {
+        drawn.then(() => linkDiagramNodes(holder, links)).catch(() => {});
+      }
+    } catch (e) { holder.textContent = "Diagram error: " + e.message; }
+  }
+
+  // The Mermaid node id of a drawn node. Some renderers set data-id; the classic
+  // flowchart (v11.15, the vendored one) only sets id="<svg id>-flowchart-<node id>-<n>".
+  function diagramNodeId(node) {
+    const dataId = node.getAttribute("data-id");
+    if (dataId) return dataId;
+    const m = (node.id || "").match(/-flowchart-(.+)-\d+$/);
+    return m ? m[1] : null;
+  }
+
+  function linkDiagramNodes(holder, links) {
+    holder.querySelectorAll("g.node").forEach((node) => {
+      const id = diagramNodeId(node);
+      const target = id && links[id] ? resolveTarget(links[id]) : null;
+      if (!target) return;
+      node.classList.add("clickable-node");
+      node.setAttribute("role", "button");
+      node.setAttribute("tabindex", "0");
+      node.addEventListener("click", () => openChangeModal(target));
+      node.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openChangeModal(target); }
+      });
+    });
   }
 
   function renderOverview() {
@@ -236,9 +451,13 @@
     if (analysis.summary) prose.appendChild(el("div", { html: md(analysis.summary) }));
     view.appendChild(prose);
 
-    // architecture diagram, then the code-flow diagram (both optional)
-    if (analysis.overview) renderDiagram(view, analysis.overview.diagramTitle, analysis.overview.diagram);
-    if (analysis.flow) renderDiagram(view, analysis.flow.title || T.codeFlow, analysis.flow.diagram);
+    // "What changes" and the flow are the two clickable maps into the code, so
+    // they sit together; the architecture diagram follows (all optional).
+    renderChanges(view);
+    if (analysis.flow) renderDiagram(view, analysis.flow.title || T.codeFlow, analysis.flow.diagram, analysis.flow.links);
+    if (analysis.overview) {
+      renderDiagram(view, analysis.overview.diagramTitle, analysis.overview.diagram, analysis.overview.links);
+    }
 
     // commits
     if (DATA.commits && DATA.commits.length) {
@@ -311,42 +530,266 @@
       show(view); setActiveNav(idx); return;
     }
 
-    const hunkNotes = af.hunks || {};
-    f.hunks.forEach((hunk, hi) => {
-      const box = el("div", { class: "hunk" });
-      box.appendChild(el("div", { class: "hunk-header" }, [
-        document.createTextNode(hunk.header),
-        hunk.section ? el("span", { text: "  " + hunk.section }) : null,
-      ]));
-      // A hunk note is either a plain string (simple block) or an object
-      // { note, detail, complexity } for a harder block that needs an extensive
-      // explanation. Both forms are supported for backward compatibility.
-      const raw = hunkNotes[hi] != null ? hunkNotes[hi] : hunkNotes[String(hi)];
-      if (raw) {
-        const note = typeof raw === "string" ? raw : raw.note || "";
-        const detail = typeof raw === "object" && raw ? raw.detail : "";
-        const complex = typeof raw === "object" && raw && raw.complexity === "high";
-        const ann = el("div", { class: "hunk-annotation" + (complex ? " complex" : "") });
-        ann.appendChild(el("div", { class: "ann-head" }, [
-          el("span", { class: "ai-tag", text: T.ai }),
-          complex ? el("span", { class: "cx-badge", text: T.complex }) : null,
-          note ? el("span", { html: md(note).replace(/^<p>|<\/p>$/g, "") }) : null,
-        ]));
-        if (detail) {
-          const det = el("details", { class: "ann-detail" });
-          if (complex) det.setAttribute("open", "");
-          det.appendChild(el("summary", { text: T.detailed }));
-          det.appendChild(el("div", { class: "prose ann-prose", html: md(detail) }));
-          ann.appendChild(det);
-        }
-        box.appendChild(ann);
-      }
-      box.appendChild(splitMode ? renderDiffSplit(hunk) : renderDiffUnified(hunk));
-      view.appendChild(box);
-    });
+    f.hunks.forEach((hunk, hi) => view.appendChild(renderHunkBox(f, hunk, hi)));
 
     show(view);
     setActiveNav(idx);
+  }
+
+  // One hunk: header, the AI annotation, then the diff. Shared by the file view
+  // and the change modal so both read the same. The modal forces the one-column
+  // (unified) diff: it reads like the file itself and fits without side scrolling.
+  // `options.focus` ({ from, to }, new-file lines) dims the rest of the hunk; the
+  // first focused row is exposed as `box._anchor` so the modal can scroll to it.
+  function renderHunkBox(f, hunk, hi, options) {
+    const unified = (options && options.unified) || !splitMode;
+    const tableOpts = { steps: stepsFor(f), focus: options && options.focus };
+    const hunkNotes = (analysisFiles[f.path] || {}).hunks || {};
+    const box = el("div", { class: "hunk" });
+    box.appendChild(el("div", { class: "hunk-header" }, [
+      document.createTextNode(hunk.header),
+      hunk.section ? el("span", { text: "  " + hunk.section }) : null,
+    ]));
+    // A hunk note is either a plain string (simple block) or an object
+    // { note, detail, complexity } for a harder block that needs an extensive
+    // explanation. Both forms are supported for backward compatibility.
+    const raw = hunkNotes[hi] != null ? hunkNotes[hi] : hunkNotes[String(hi)];
+    if (raw) {
+      const note = typeof raw === "string" ? raw : raw.note || "";
+      const detail = typeof raw === "object" && raw ? raw.detail : "";
+      const complex = typeof raw === "object" && raw && raw.complexity === "high";
+      const ann = el("div", { class: "hunk-annotation" + (complex ? " complex" : "") });
+      ann.appendChild(el("div", { class: "ann-head" }, [
+        el("span", { class: "ai-tag", text: T.ai }),
+        complex ? el("span", { class: "cx-badge", text: T.complex }) : null,
+        note ? el("span", { html: md(note).replace(/^<p>|<\/p>$/g, "") }) : null,
+      ]));
+      if (detail) {
+        const det = el("details", { class: "ann-detail" });
+        if (complex) det.setAttribute("open", "");
+        det.appendChild(el("summary", { text: T.detailed }));
+        det.appendChild(el("div", { class: "prose ann-prose", html: md(detail) }));
+        ann.appendChild(det);
+      }
+      box.appendChild(ann);
+    }
+    const table = unified ? renderDiffUnified(hunk, f.language, tableOpts) : renderDiffSplit(hunk, f.language, tableOpts);
+    box.appendChild(table);
+    box._anchor = table._anchor;
+    return box;
+  }
+
+  // ---------- change modal: one hunk, focused, with the whole file on demand ----------
+
+  // `lines: [from, to]` (new-file line numbers) narrows a reference to the exact
+  // code it talks about. Kept only when it overlaps the hunk; otherwise dropped
+  // with a warning and the whole hunk is shown, as without it.
+  function focusFor(ref, hunk) {
+    if (!ref.lines) return null;
+    const [from, to] = Array.isArray(ref.lines) ? ref.lines.map(Number) : [];
+    const hunkFrom = hunk ? hunk.newStart : 0;
+    const hunkTo = hunk ? hunk.newStart + Math.max(hunk.newLines, 1) - 1 : 0;
+    if (!Number.isInteger(from) || !Number.isInteger(to) || from > to || !hunk || to < hunkFrom || from > hunkTo) {
+      console.warn("[recap] lines outside the referenced hunk:", ref);
+      return null;
+    }
+    return { from, to };
+  }
+
+  // Resolve an analysis reference { file, hunk, lines? } to indexes, or null when
+  // it does not point at a real file/hunk of this diff (never guess a target).
+  function resolveTarget(ref) {
+    if (!ref || !ref.file) return null;
+    const fileIdx = fileIndexByPath.get(ref.file);
+    if (fileIdx == null) {
+      console.warn("[recap] unknown file in analysis reference:", ref.file);
+      return null;
+    }
+    const hunkCount = DATA.files[fileIdx].hunks.length;
+    const hunkIdx = ref.hunk == null ? 0 : Number(ref.hunk);
+    if (!Number.isInteger(hunkIdx) || hunkIdx < 0 || hunkIdx >= Math.max(hunkCount, 1)) {
+      console.warn("[recap] hunk out of range in analysis reference:", ref);
+      return null;
+    }
+    return { fileIdx, hunkIdx, focus: focusFor(ref, DATA.files[fileIdx].hunks[hunkIdx]) };
+  }
+
+  // The whole new file, changed lines marked, the steps column alongside, and the
+  // focus (the referenced lines, else the whole hunk) outlined. Nothing is dimmed:
+  // this view is for context.
+  function renderFullFile(f, focusHunk, focusLines) {
+    const added = new Set();
+    for (const h of f.hunks) for (const l of h.lines) if (l.type === "add") added.add(l.newNum);
+    const focus = focusLines || (focusHunk
+      ? { from: focusHunk.newStart, to: focusHunk.newStart + Math.max(focusHunk.newLines, 1) - 1 }
+      : null);
+    const table = el("table", { class: "diff full-file" });
+    const rows = [], newNums = [];
+    let anchor = null;
+    f.fullLines.forEach((text, i) => {
+      const n = i + 1;
+      const inFocus = focus && n >= focus.from && n <= focus.to;
+      const tr = el("tr", { class: inFocus ? "focus" : "" });
+      tr.appendChild(el("td", { class: "gutter", text: String(n) }));
+      const code = el("td", { class: "code" + (added.has(n) ? " add" : "") });
+      fillCode(code, text, f.language);
+      tr.appendChild(code);
+      table.appendChild(tr);
+      rows.push(tr);
+      newNums.push(n);
+      if (inFocus && !anchor) anchor = tr;
+    });
+    addStepColumn(table, rows, newNums, stepsFor(f));
+    return { table, anchor };
+  }
+
+  let modalReturnFocus = null;
+
+  function closeModal() {
+    const m = document.getElementById("rc-modal");
+    if (m) m.remove();
+    document.body.classList.remove("modal-open");
+    if (modalReturnFocus) modalReturnFocus.focus();
+    modalReturnFocus = null;
+  }
+
+  function openChangeModal(target) {
+    closeModal();
+    modalReturnFocus = document.activeElement;
+    const f = DATA.files[target.fileIdx];
+    const hunk = f.hunks[target.hunkIdx];
+
+    const body = el("div", { class: "modal-body" });
+    const focused = el("div", { class: "modal-focus" });
+    const af = analysisFiles[f.path] || {};
+    if (af.purpose) {
+      focused.appendChild(el("div", { class: "file-purpose" }, [
+        el("span", { class: "ai-tag", text: T.whyFile }),
+        el("div", { html: md(af.purpose) }),
+      ]));
+    }
+    let focusAnchor = null;
+    if (hunk) {
+      const box = renderHunkBox(f, hunk, target.hunkIdx, { unified: true, focus: target.focus });
+      focusAnchor = box._anchor;
+      focused.appendChild(box);
+    } else focused.appendChild(el("div", { class: "binary-note", text: f.binary ? T.binary : T.noHunks }));
+    body.appendChild(focused);
+
+    const fullWrap = el("div", { class: "modal-full", hidden: "" });
+    const toggle = el("button", { class: "icon-btn", type: "button", text: T.showFullFile });
+    toggle.addEventListener("click", () => {
+      const showingFull = !fullWrap.hasAttribute("hidden");
+      if (showingFull) {
+        fullWrap.setAttribute("hidden", "");
+        focused.removeAttribute("hidden");
+        toggle.textContent = T.showFullFile;
+        return;
+      }
+      if (!fullWrap.childNodes.length) {
+        if (f.fullLines) {
+          const { table, anchor } = renderFullFile(f, hunk, target.focus);
+          fullWrap.appendChild(el("div", { class: "full-note", text: T.fullNote }));
+          fullWrap.appendChild(table);
+          fullWrap._anchor = anchor;
+        } else {
+          fullWrap.appendChild(el("div", { class: "binary-note", text: f.fullTruncated ? T.fullTruncated : T.fullUnavailable }));
+        }
+      }
+      focused.setAttribute("hidden", "");
+      fullWrap.removeAttribute("hidden");
+      toggle.textContent = T.showChangeOnly;
+      if (fullWrap._anchor) fullWrap._anchor.scrollIntoView({ block: "center" });
+    });
+    body.appendChild(fullWrap);
+
+    const closeBtn = el("button", { class: "icon-btn modal-close", type: "button", "aria-label": T.close, title: T.close, text: "✕" });
+    closeBtn.addEventListener("click", closeModal);
+    const toFile = el("button", { class: "icon-btn", type: "button", text: T.openFileView });
+    toFile.addEventListener("click", () => { closeModal(); selectFile(target.fileIdx); });
+
+    const position = f.hunks.length ? `${T.changeOf} ${target.hunkIdx + 1}/${f.hunks.length}` : "";
+    const dialog = el("div", { class: "modal", role: "dialog", "aria-modal": "true", "aria-label": f.path }, [
+      el("div", { class: "modal-head" }, [
+        el("div", { class: "file-path" }, [
+          el("span", { class: "chip " + f.status, text: f.status[0].toUpperCase() }),
+          document.createTextNode(f.path),
+        ]),
+        el("span", { class: "modal-pos", text: position }),
+        el("div", { class: "spacer" }),
+        toggle,
+        toFile,
+        closeBtn,
+      ]),
+      body,
+    ]);
+    const backdrop = el("div", { class: "modal-backdrop", id: "rc-modal" }, [dialog]);
+    // Close only on a click on the backdrop itself, not on one that bubbled up from the dialog.
+    backdrop.addEventListener("click", (e) => { if (e.target === backdrop) closeModal(); });
+    document.body.appendChild(backdrop);
+    document.body.classList.add("modal-open");
+    closeBtn.focus();
+    // Land on the lines the reference talks about, not on the top of the hunk.
+    if (focusAnchor) focusAnchor.scrollIntoView({ block: "center" });
+  }
+
+  // A clickable reference to a change. Renders as plain content when the
+  // reference does not resolve, so a bad analysis entry degrades instead of breaking.
+  function changeLink(ref, children, cls) {
+    const target = resolveTarget(ref);
+    if (!target) return el("span", { class: cls || "" }, children);
+    return el("button", {
+      class: "change-link " + (cls || ""), type: "button",
+      onclick: () => openChangeModal(target),
+    }, children);
+  }
+
+  // ---------- "What changes": problem, numbered points, what it does not cover ----------
+  function renderChanges(view) {
+    const ch = analysis.changes;
+    if (!ch) return;
+    const sec = el("section", { class: "changes prose" });
+    sec.appendChild(el("h2", { text: ch.title || T.whatChanges }));
+
+    if (ch.problem) {
+      sec.appendChild(el("h3", { text: T.problem }));
+      sec.appendChild(el("div", { html: md(ch.problem) }));
+    }
+
+    const points = Array.isArray(ch.points) ? ch.points : [];
+    if (points.length) {
+      const list = el("ol", { class: "change-points" });
+      points.forEach((p) => {
+        const li = el("li");
+        const head = el("div", { class: "point-head" }, [
+          changeLink({ file: p.file, hunk: p.hunk, lines: p.lines }, [el("span", { class: "point-title", text: p.title || p.file || "" })], "point-link"),
+          p.file ? el("code", { class: "point-file", text: p.file }) : null,
+        ]);
+        li.appendChild(head);
+        const bullets = Array.isArray(p.bullets) ? p.bullets : [];
+        if (bullets.length) {
+          const ul = el("ul", { class: "point-bullets" });
+          for (const b of bullets) {
+            const text = typeof b === "string" ? b : b.text;
+            const ref = typeof b === "object" && b && b.hunk != null
+              ? { file: b.file || p.file, hunk: b.hunk, lines: b.lines }
+              : null;
+            const content = [el("span", { html: md(text).replace(/^<p>|<\/p>$/g, "") })];
+            ul.appendChild(el("li", {}, [ref ? changeLink(ref, content, "bullet-link") : el("span", {}, content)]));
+          }
+          li.appendChild(ul);
+        }
+        list.appendChild(li);
+      });
+      sec.appendChild(list);
+    }
+
+    const notCovered = Array.isArray(ch.notCovered) ? ch.notCovered : [];
+    if (notCovered.length) {
+      sec.appendChild(el("h3", { text: T.notCovered }));
+      sec.appendChild(el("ul", {}, notCovered.map((t) => el("li", { html: md(t).replace(/^<p>|<\/p>$/g, "") }))));
+    }
+    view.appendChild(sec);
   }
 
   let current = -1;
@@ -470,6 +913,9 @@
     }
     buildTopbar();
     buildSidebar();
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && document.getElementById("rc-modal")) closeModal();
+    });
     if (!DATA.files.length) {
       show(el("div", { class: "empty", text: T.noChanges }));
       return;

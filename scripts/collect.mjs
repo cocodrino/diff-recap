@@ -17,9 +17,14 @@
 //   --context  Diff context lines. Default: 3.
 
 import { execFileSync } from "node:child_process";
-import { writeFileSync, mkdirSync } from "node:fs";
+import { writeFileSync, mkdirSync, readFileSync, existsSync } from "node:fs";
 import path from "node:path";
-import { recapDir, branchSlug } from "./paths.mjs";
+import { recapDir, branchSlug, repoRoot } from "./paths.mjs";
+
+// The viewer's "full file" view shows the NEW version of each changed file with
+// the changed lines marked. Files longer than this keep only their hunks, so one
+// generated file cannot bloat the self-contained HTML.
+const MAX_FULL_FILE_LINES = 5000;
 
 function parseArgs(argv) {
   const args = { context: 3 };
@@ -171,6 +176,34 @@ function parseDiff(diffText) {
   return files;
 }
 
+// The ref whose file contents are "after" the change. A raw range's right side
+// ("a...b" / "a..b"), else --head; null means the working tree.
+function afterRef(args, head) {
+  if (args.working) return null;
+  if (args.range) {
+    const parts = args.range.split(/\.{2,3}/);
+    return parts.length > 1 && parts[1] ? parts[1] : "HEAD";
+  }
+  return head;
+}
+
+// Full NEW content of a changed file, or null when it has none to show (removed,
+// binary) or is over the size cap. Read from git for a ref, from disk otherwise.
+function fullContent(file, ref) {
+  if (file.binary || file.status === "removed") return null;
+  let text = null;
+  if (ref === null) {
+    const abs = path.join(repoRoot(), file.path);
+    if (existsSync(abs)) text = readFileSync(abs, "utf8");
+  } else {
+    text = gitSafe(["show", `${ref}:${file.path}`], null);
+  }
+  if (text == null) return null;
+  const lines = text.replace(/\r\n/g, "\n").split("\n");
+  if (lines.length && lines[lines.length - 1] === "") lines.pop();
+  return lines.length > MAX_FULL_FILE_LINES ? { truncated: true } : { lines };
+}
+
 function main() {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) {
@@ -230,6 +263,14 @@ function main() {
     const n = numByPath[f.path] || {};
     f.insertions = n.insertions ?? f.hunks.flatMap((h) => h.lines).filter((l) => l.type === "add").length;
     f.deletions = n.deletions ?? f.hunks.flatMap((h) => h.lines).filter((l) => l.type === "del").length;
+  }
+
+  // Full new content per file, for the viewer's "see the whole file" view.
+  const ref = afterRef(args, head);
+  for (const f of files) {
+    const full = fullContent(f, ref);
+    if (full?.lines) f.fullLines = full.lines;
+    else if (full?.truncated) f.fullTruncated = true;
   }
 
   // Commits in range.

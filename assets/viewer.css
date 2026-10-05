@@ -21,6 +21,13 @@
   --chip-ren: #1f4f8e;
   --note-bg: rgba(88, 166, 255, 0.1);
   --note-bar: #58a6ff;
+  /* syntax highlighting (GitHub dark palette) */
+  --hl-kw: #ff7b72;
+  --hl-str: #a5d6ff;
+  --hl-com: #8b949e;
+  --hl-num: #79c0ff;
+  --hl-type: #ffa657;
+  --hl-fn: #d2a8ff;
   --radius: 10px;
   --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
   --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
@@ -39,6 +46,12 @@
   --add-text: #1a7f37;
   --del-text: #cf222e;
   --note-bg: rgba(9, 105, 218, 0.08);
+  --hl-kw: #cf222e;
+  --hl-str: #0a3069;
+  --hl-com: #6e7781;
+  --hl-num: #0550ae;
+  --hl-type: #953800;
+  --hl-fn: #8250df;
 }
 
 * { box-sizing: border-box; }
@@ -252,6 +265,8 @@ a:hover { text-decoration: underline; }
   width: 1%; min-width: 42px; text-align: right; color: var(--text-dim);
   user-select: none; background: var(--bg-elev); border-right: 1px solid var(--border);
   padding: 0 8px;
+  /* Line numbers never wrap: a 4-digit number split over two rows reads as two lines. */
+  white-space: nowrap; word-break: normal;
 }
 .diff tr.context td.code { color: var(--text); }
 .diff tr.add td.code, .diff td.code.add { background: var(--add-bg); }
@@ -260,6 +275,14 @@ a:hover { text-decoration: underline; }
 .diff td.code.del::before { content: "−"; color: var(--del-text); margin-right: 6px; }
 .diff td.code.empty { background: var(--bg-elev); }
 .diff td.code { padding-left: 8px; }
+
+/* syntax highlighting */
+.diff .hl-kw { color: var(--hl-kw); }
+.diff .hl-str { color: var(--hl-str); }
+.diff .hl-com { color: var(--hl-com); font-style: italic; }
+.diff .hl-num { color: var(--hl-num); }
+.diff .hl-type { color: var(--hl-type); }
+.diff .hl-fn { color: var(--hl-fn); }
 
 /* word-level diff: stronger highlight on the exact changed tokens */
 .diff .word-del { background: rgba(248, 81, 73, 0.4); border-radius: 2px; }
@@ -281,3 +304,90 @@ a:hover { text-decoration: underline; }
 .ov-card .ov-meta { display: flex; gap: 8px; align-items: center; }
 
 .empty { color: var(--text-dim); padding: 40px; text-align: center; }
+
+/* ---------- "What changes" ---------- */
+.changes { margin: 8px 0 24px; }
+.change-points { padding-left: 24px; }
+.change-points > li { margin: 14px 0; }
+.point-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.point-title { font-weight: 650; font-size: 15px; }
+.point-file { font-size: 12px; color: var(--text-dim); }
+.point-bullets { margin: 6px 0 0; }
+
+/* A reference into the code: reads as text, behaves as a button. */
+.change-link {
+  all: unset; cursor: pointer; border-radius: 4px;
+  text-decoration: underline dotted var(--accent); text-underline-offset: 3px;
+}
+.change-link:hover { background: var(--note-bg); text-decoration-style: solid; }
+.change-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.change-link::after { content: " \2197"; color: var(--accent); font-size: 12px; }
+.change-link code { cursor: pointer; }
+
+/* ---------- Clickable diagram nodes ---------- */
+.diagram-hint { margin: -4px 0 10px; text-align: left; color: var(--text-dim); font-size: 12.5px; }
+.clickable-node { cursor: pointer; }
+.clickable-node:hover > rect, .clickable-node:hover > polygon,
+.clickable-node:hover > path, .clickable-node:hover > circle {
+  stroke: var(--accent) !important; stroke-width: 2.5px !important;
+}
+.clickable-node:focus { outline: none; }
+.clickable-node:focus-visible > rect { stroke: var(--accent) !important; stroke-width: 3px !important; }
+
+/* ---------- Change modal ---------- */
+body.modal-open { overflow: hidden; }
+.modal-backdrop {
+  position: fixed; inset: 0; z-index: 100;
+  background: rgba(1, 4, 9, 0.6); backdrop-filter: blur(2px);
+  display: flex; align-items: center; justify-content: center; padding: 24px;
+  animation: fadeIn .15s ease both;
+}
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+.modal {
+  width: min(1200px, 100%); max-height: calc(100vh - 48px);
+  display: flex; flex-direction: column;
+  background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.45);
+}
+.modal-head {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 12px 16px; border-bottom: 1px solid var(--border); background: var(--bg-elev);
+  border-radius: var(--radius) var(--radius) 0 0;
+}
+.modal-head .file-path {
+  font-family: var(--mono); font-size: 14px; font-weight: 650;
+  display: flex; align-items: center; gap: 8px; word-break: break-all;
+}
+.modal-head .spacer { flex: 1; }
+.modal-pos { font-family: var(--mono); font-size: 12px; color: var(--text-dim); }
+.modal-body { overflow-y: auto; padding: 4px 18px 18px; }
+.modal-body .hunk { margin-top: 14px; }
+.full-note { color: var(--text-dim); font-size: 12.5px; margin: 14px 0 8px; }
+.diff.full-file { border: 1px solid var(--border); border-radius: var(--radius); }
+/* Focus on the lines a reference talks about: the rest stays visible but recedes. */
+.diff tr.dim td.code, .diff tr.dim td.gutter { opacity: 0.35; }
+.diff tr.focus-line td.code { box-shadow: inset 3px 0 0 var(--accent); }
+.diff tr.focus-line td.gutter { color: var(--accent); font-weight: 700; }
+
+/* "What it does": a plain-language column spanning the rows of each step. */
+.diff td.step {
+  width: 26%; min-width: 200px; vertical-align: top;
+  padding: 6px 12px; border-left: 1px solid var(--border);
+  font-family: var(--sans); font-size: 12.5px; line-height: 1.45;
+  white-space: normal; word-break: normal;
+  color: var(--text); background: var(--note-bg);
+  border-top: 1px solid var(--border);
+}
+.diff td.step.step-empty { background: var(--bg-elev); }
+.diff td.step[role="button"] { cursor: pointer; transition: opacity .12s, background .12s; }
+.diff td.step[role="button"]:hover { background: rgba(88, 166, 255, 0.18); }
+.diff td.step[role="button"]:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.diff td.step.step-active { box-shadow: inset 3px 0 0 var(--accent); background: rgba(88, 166, 255, 0.22); }
+.diff td.step.step-dim { opacity: 0.4; }
+.diff td.step code {
+  font-family: var(--mono); font-size: 11.5px;
+  background: var(--bg-elev-2); padding: 1px 4px; border-radius: 4px;
+}
+.diff.full-file tr.focus td.gutter { color: var(--accent); font-weight: 700; }
+.diff.full-file tr.focus td.code { box-shadow: inset 3px 0 0 var(--accent); }
+[hidden] { display: none !important; }
