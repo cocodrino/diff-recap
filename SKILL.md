@@ -345,9 +345,23 @@ user. That path IS the deliverable.
 - **Per-file detail** (click a file or open `recap.html#file/<n>`): the file's
   status, the AI "why this file changed" note, then each hunk with its AI
   annotation above a **side-by-side diff** (old vs. new, line-numbered).
+- **File tree sidebar** (GitHub review style): only the changed files, grouped
+  by folder, single-child folders merged (`backend/app`), folders collapsible,
+  search filters files and folders. The sidebar stays fixed and resizable; only
+  the content pane scrolls.
+- **Hover a file reference → highlight it in the tree.** Every mention of a
+  changed file — a path or bare file name in the prose (`schema.ts`,
+  `daily.function.ts:148`), the file beside a point, a change link, a file card,
+  a diagram node — lights that file and its folders up in the tree, scrolling the
+  sidebar to it. A name shared by two changed files resolves to none (never a guess).
+- **Diagram pan & zoom**: pinch (trackpad or touch), Ctrl + wheel, drag, scroll,
+  plus −/+/Fit/100%/full-screen buttons. The first view never shrinks a wide
+  diagram below 75%, so labels stay readable.
 - **Controls**: Split/Unified diff toggle, light/dark theme toggle.
 - **Global → detail navigation** with deep links — `#file/2` opens straight to
-  the third file, so a specific view is shareable inside the artifact.
+  the third file, so a specific view is shareable inside the artifact. Each view
+  is a history entry: the browser's Back button and the "← Overview" link return
+  to the overview at the scroll position the reader left.
 
 ## Notes
 

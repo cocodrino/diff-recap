@@ -70,10 +70,12 @@ a { color: var(--accent); text-decoration: none; }
 a:hover { text-decoration: underline; }
 
 /* ---------- Layout ---------- */
-.app { display: flex; flex-direction: column; min-height: 100vh; }
+/* Fixed frame: the topbar and the sidebar stay put; only the content pane scrolls,
+   so the file tree is on screen wherever the reader is in the overview. */
+.app { display: flex; flex-direction: column; height: 100vh; height: 100dvh; overflow: hidden; }
 
 .topbar {
-  position: sticky; top: 0; z-index: 20;
+  position: relative; z-index: 20; flex-shrink: 0;
   display: flex; align-items: center; gap: 16px;
   padding: 12px 20px;
   background: var(--bg-elev);
@@ -105,10 +107,12 @@ a:hover { text-decoration: underline; }
 
 /* ---------- Sidebar ---------- */
 .sidebar {
-  width: 320px; flex-shrink: 0;
+  width: 340px; min-width: 220px; max-width: 60vw; flex-shrink: 0;
+  /* Drag the bottom-right corner to widen it when names are long. */
+  resize: horizontal;
   border-right: 1px solid var(--border);
   background: var(--bg-elev);
-  overflow-y: auto;
+  overflow-y: auto; overflow-x: hidden;
   padding: 8px 0;
 }
 .search-wrap { padding: 8px 12px 4px; position: sticky; top: 0; background: var(--bg-elev); z-index: 2; }
@@ -134,7 +138,46 @@ a:hover { text-decoration: underline; }
 .sidebar .nav-item:hover { background: var(--bg-elev-2); }
 .sidebar .nav-item.active { background: var(--bg-elev-2); border-left-color: var(--accent); }
 .sidebar .nav-item .label { flex: 1; font-size: 13px; word-break: break-all; }
-.sidebar .nav-item .path-dir { color: var(--text-dim); }
+
+/* File tree: folders and changed files, GitHub review style. Indentation comes
+   from an inline padding-left set per depth. */
+.tree { padding-bottom: 12px; }
+.tree-dir, .sidebar .tree-file { padding-top: 4px; padding-bottom: 4px; padding-right: 12px; }
+.tree-dir {
+  display: flex; align-items: center; gap: 6px; cursor: pointer;
+  font-size: 13px; color: var(--text-dim); border-left: 3px solid transparent;
+  user-select: none; transition: background .12s, color .12s;
+}
+.tree-dir:hover { background: var(--bg-elev-2); color: var(--text); }
+.tree-dir:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.tree-caret { width: 10px; font-size: 10px; display: inline-block; transition: transform .12s; flex-shrink: 0; }
+.tree-dir-wrap.collapsed > .tree-dir .tree-caret { transform: rotate(-90deg); }
+.tree-dir-wrap.collapsed > .tree-children { display: none; }
+/* While searching every folder opens, so a match is never hidden in a closed one. */
+.tree.searching .tree-dir-wrap.collapsed > .tree-children { display: block; }
+.tree.searching .tree-dir-wrap.collapsed > .tree-dir .tree-caret { transform: none; }
+.tree-folder {
+  width: 14px; height: 11px; flex-shrink: 0; position: relative;
+  border: 1.5px solid currentColor; border-radius: 2px; opacity: .8;
+}
+.tree-folder::before {
+  content: ""; position: absolute; top: -4px; left: -1.5px; width: 6px; height: 3px;
+  border: 1.5px solid currentColor; border-bottom: none; border-radius: 2px 2px 0 0;
+}
+/* One line per file, as GitHub does; the full path is in the row's tooltip. */
+.sidebar .tree-file .label {
+  font-family: var(--mono); font-size: 12.5px; min-width: 0;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; word-break: normal;
+}
+.tree-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; word-break: normal; }
+
+/* A reference elsewhere on the page is hovered: its file and the folders on its path light up. */
+.sidebar .tree-file.tree-hl {
+  background: var(--note-bg); border-left-color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+.tree-dir.tree-hl-path { color: var(--accent); }
+.tree-dir.tree-hl-path .tree-name { font-weight: 650; }
 .sidebar .section-title {
   font-size: 11px; text-transform: uppercase; letter-spacing: .06em;
   color: var(--text-dim); padding: 14px 16px 6px; font-weight: 700;
@@ -197,11 +240,41 @@ a:hover { text-decoration: underline; }
 .diagram-card {
   margin: 18px 0; padding: 20px; background: var(--bg-elev);
   border: 1px solid var(--border); border-radius: var(--radius);
-  overflow-x: auto; text-align: center;
 }
-.diagram-card h3 { margin-top: 0; text-align: left; }
+.diagram-card h3 { margin-top: 0; }
+
+/* Pan & zoom: the drawn SVG sits at its natural size on a stage that is moved and
+   scaled with a transform; the viewport clips it. */
+.diagram-toolbar { display: flex; align-items: center; gap: 6px; margin: 0 0 8px; flex-wrap: wrap; }
+.zoom-btn { padding: 3px 9px; font-size: 12.5px; min-width: 30px; }
+.zoom-level { font-family: var(--mono); font-size: 12px; color: var(--text-dim); min-width: 44px; text-align: center; }
+.diagram-viewport {
+  position: relative; overflow: hidden; height: 400px;
+  background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
+  cursor: grab; touch-action: none; overscroll-behavior: contain;
+}
+.diagram-viewport.dragging { cursor: grabbing; }
+.diagram-viewport.dragging * { cursor: grabbing !important; }
+.diagram-stage { position: absolute; top: 0; left: 0; transform-origin: 0 0; will-change: transform; }
+.diagram-stage .mermaid { line-height: normal; }
+.diagram-card:fullscreen {
+  display: flex; flex-direction: column; margin: 0; border-radius: 0; overflow: hidden;
+}
+.diagram-card:fullscreen .diagram-viewport { flex: 1; height: auto !important; }
+
+/* ---------- File references in prose ---------- */
+/* A mention of a changed file: hovering it lights the file up in the tree. */
+.file-ref { text-decoration: underline dotted var(--text-dim); text-underline-offset: 3px; border-radius: 4px; }
+.file-ref:hover { background: var(--note-bg); text-decoration-color: var(--accent); }
+.ov-card[data-file-ref]:hover { box-shadow: 0 0 0 1px var(--accent); }
 
 /* ---------- File detail ---------- */
+.back-link {
+  all: unset; cursor: pointer; display: inline-block; margin: -8px 0 14px;
+  font-size: 13px; color: var(--accent); padding: 2px 6px; border-radius: 6px;
+}
+.back-link:hover { background: var(--note-bg); }
+.back-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .file-head { margin-bottom: 14px; }
 .file-head .file-path {
   font-family: var(--mono); font-size: 18px; font-weight: 650;
@@ -330,6 +403,10 @@ a:hover { text-decoration: underline; }
 .clickable-node:hover > rect, .clickable-node:hover > polygon,
 .clickable-node:hover > path, .clickable-node:hover > circle {
   stroke: var(--accent) !important; stroke-width: 2.5px !important;
+}
+.file-node:hover > rect, .file-node:hover > polygon,
+.file-node:hover > path, .file-node:hover > circle {
+  stroke: var(--accent) !important; stroke-width: 2px !important;
 }
 .clickable-node:focus { outline: none; }
 .clickable-node:focus-visible > rect { stroke: var(--accent) !important; stroke-width: 3px !important; }

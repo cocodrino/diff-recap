@@ -35,6 +35,10 @@
       fullNote: "New version of the file. Changed lines are marked; removed lines are in the diff above.",
       changeOf: "change",
       stepHint: "Click to focus this step; click again to clear.",
+      backToOverview: "← Overview", toggleFolder: "Collapse / expand folder",
+      zoomIn: "Zoom in", zoomOut: "Zoom out", zoomFit: "Fit", zoomReset: "100%",
+      fullscreen: "Full screen",
+      zoomHint: "Pinch or Ctrl + scroll to zoom · drag or scroll to move.",
     },
     es: {
       overview: "Resumen", files: "Archivos", commits: "Commits",
@@ -56,6 +60,10 @@
       fullNote: "Versión nueva del archivo. Las líneas cambiadas están marcadas; las borradas se ven en el diff de arriba.",
       changeOf: "cambio",
       stepHint: "Haz clic para enfocar este paso; otro clic lo quita.",
+      backToOverview: "← Resumen", toggleFolder: "Plegar / desplegar carpeta",
+      zoomIn: "Acercar", zoomOut: "Alejar", zoomFit: "Ajustar", zoomReset: "100%",
+      fullscreen: "Pantalla completa",
+      zoomHint: "Pellizca o usa Ctrl + rueda para ampliar · arrastra o desliza para moverte.",
     },
   };
   const langBase = String(analysis.lang || "en").toLowerCase().split("-")[0];
@@ -396,26 +404,275 @@
     c.innerHTML = "";
     c.appendChild(node);
     c.scrollTop = 0;
+    linkFileMentions(node);
+  }
+
+  // ---------- file references: anything that names a changed file ----------
+  // A reference carries data-file-ref="<file index>"; hovering it highlights that
+  // file in the sidebar tree (see the hover wiring at boot).
+  function markFileRef(node, idx, isMention) {
+    node.setAttribute("data-file-ref", String(idx));
+    if (isMention) {
+      node.classList.add("file-ref");
+      if (!node.getAttribute("title")) node.setAttribute("title", DATA.files[idx].path);
+    }
+    return node;
+  }
+
+  // A path as prose writes it — full ("backend/x/y.ts"), partial ("x/y.ts") or
+  // bare ("y.ts"), optionally with ":line" — to a file index. Only an exact path
+  // or a suffix shared by exactly ONE changed file resolves: an ambiguous name
+  // ("index.ts" in two folders) highlights nothing rather than the wrong file.
+  const mentionCache = new Map();
+  function resolveFileMention(raw) {
+    const text = String(raw).trim().replace(/:\d+(?:-\d+)?$/, "").replace(/^\.\//, "");
+    if (mentionCache.has(text)) return mentionCache.get(text);
+    let idx = fileIndexByPath.has(text) ? fileIndexByPath.get(text) : null;
+    if (idx == null && text) {
+      const hits = [];
+      DATA.files.forEach((f, i) => { if (f.path.endsWith("/" + text)) hits.push(i); });
+      if (hits.length === 1) idx = hits[0];
+    }
+    mentionCache.set(text, idx);
+    return idx;
+  }
+
+  const MENTION_RE = /[\w@[\]-][\w.@[\]-]*(?:\/[\w.@[\]-]+)*\.[A-Za-z]\w{0,5}(?::\d+(?:-\d+)?)?/g;
+  // Code, line numbers and diagrams are not prose; an existing mention is not re-wrapped.
+  const MENTION_SKIP = "td.code, td.gutter, pre, .mermaid, .hunk-header, .file-ref, .tree, script, style";
+
+  // Mark every mention of a changed file inside `root`: a whole `code` span that
+  // names one, and bare paths inside plain text (wrapped in a span).
+  function linkFileMentions(root) {
+    root.querySelectorAll("code").forEach((c) => {
+      if (c.closest(MENTION_SKIP)) return;
+      const idx = resolveFileMention(c.textContent);
+      if (idx != null) markFileRef(c, idx, true);
+    });
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT, {
+      acceptNode(n) {
+        if (n.nodeType === 1) return n.matches(MENTION_SKIP + ", code") ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_SKIP;
+        return /\.[A-Za-z]/.test(n.nodeValue) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
+      },
+    });
+    const texts = [];
+    while (walker.nextNode()) texts.push(walker.currentNode);
+    texts.forEach(wrapMentions);
+  }
+
+  function wrapMentions(textNode) {
+    const text = textNode.nodeValue;
+    const frag = document.createDocumentFragment();
+    let last = 0;
+    for (const m of text.matchAll(MENTION_RE)) {
+      const idx = resolveFileMention(m[0]);
+      if (idx == null) continue;
+      frag.appendChild(document.createTextNode(text.slice(last, m.index)));
+      frag.appendChild(markFileRef(el("span", { text: m[0] }), idx, true));
+      last = m.index + m[0].length;
+    }
+    if (!last) return;
+    frag.appendChild(document.createTextNode(text.slice(last)));
+    textNode.replaceWith(frag);
   }
 
   // Render one Mermaid diagram card (title optional). No-op if empty/unavailable.
   // `links` maps a node id to a change ({ file, hunk }): those nodes open the
-  // change modal once Mermaid has drawn them.
+  // change modal once Mermaid has drawn them. Returns a promise that settles once
+  // the diagram is drawn, so the caller can restore a scroll position after the
+  // layout stops moving.
   function renderDiagram(view, title, source, links) {
-    if (!source || !window.mermaid) return;
+    if (!source || !window.mermaid) return Promise.resolve();
     const card = el("div", { class: "diagram-card" });
     if (title) card.appendChild(el("h3", { text: title }));
     const hasLinks = links && Object.keys(links).length > 0;
-    if (hasLinks) card.appendChild(el("p", { class: "diagram-hint", text: T.flowHint }));
+    card.appendChild(el("p", { class: "diagram-hint", text: (hasLinks ? T.flowHint + " " : "") + T.zoomHint }));
     const holder = el("div", { class: "mermaid", text: source });
-    card.appendChild(holder);
+    const viewport = el("div", { class: "diagram-viewport" }, [el("div", { class: "diagram-stage" }, [holder])]);
+    card.appendChild(viewport);
     view.appendChild(card);
     try {
-      const drawn = window.mermaid.run({ nodes: [holder] });
-      if (hasLinks && drawn && typeof drawn.then === "function") {
-        drawn.then(() => linkDiagramNodes(holder, links)).catch(() => {});
+      return Promise.resolve(window.mermaid.run({ nodes: [holder] }))
+        .then(() => {
+          wireDiagramNodes(holder, links || {});
+          enablePanZoom(card, viewport);
+        })
+        .catch(() => {});
+    } catch (e) {
+      holder.textContent = "Diagram error: " + e.message;
+      return Promise.resolve();
+    }
+  }
+
+  // ---------- diagram pan & zoom ----------
+  // The drawn SVG is laid out at its natural size inside a stage that is moved
+  // and scaled with a CSS transform. Gestures: trackpad pinch / Ctrl + wheel
+  // (Chrome, Firefox, Edge), Safari gesture events, two-finger touch pinch,
+  // mouse drag, and plain wheel to pan. Plain wheel only pans while the diagram
+  // can still move that way — at an edge the page scrolls, so a tall diagram
+  // never traps the reader.
+  const ZOOM_MIN = 0.2, ZOOM_MAX = 4, ZOOM_STEP = 1.25;
+  // Below this the labels stop being readable, so the first view does not shrink
+  // a wide diagram past it; the reader pans instead, or picks "Fit".
+  const ZOOM_READABLE = 0.75;
+
+  function enablePanZoom(card, viewport) {
+    // The reader may have left the view while Mermaid was drawing: nothing to measure.
+    if (!card.isConnected) return;
+    const stage = viewport.firstChild;
+    const svg = stage.querySelector("svg");
+    if (!svg) return;
+    const vb = svg.viewBox && svg.viewBox.baseVal;
+    const natW = vb && vb.width ? vb.width : svg.getBoundingClientRect().width;
+    const natH = vb && vb.height ? vb.height : svg.getBoundingClientRect().height;
+    if (!natW || !natH) return;
+    // Mermaid sizes the SVG to "100%" with a max-width; pin it to its natural size.
+    svg.removeAttribute("width");
+    svg.removeAttribute("height");
+    svg.style.width = natW + "px";
+    svg.style.height = natH + "px";
+    svg.style.maxWidth = "none";
+
+    let scale = 1, x = 0, y = 0;
+    const size = () => ({ w: viewport.clientWidth, h: viewport.clientHeight });
+
+    function clampPan() {
+      const { w, h } = size();
+      const cw = natW * scale, ch = natH * scale;
+      // Smaller than the viewport: centered. Larger: no empty gap past either edge.
+      x = cw <= w ? (w - cw) / 2 : Math.min(0, Math.max(w - cw, x));
+      y = ch <= h ? (h - ch) / 2 : Math.min(0, Math.max(h - ch, y));
+    }
+    function apply() {
+      clampPan();
+      stage.style.transform = `translate(${x}px, ${y}px) scale(${scale})`;
+      zoomLabel.textContent = Math.round(scale * 100) + "%";
+    }
+    // Zoom keeping the diagram point under (px, py) — viewport coordinates — still.
+    function zoomAt(next, px, py) {
+      next = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, next));
+      x = px - ((px - x) / scale) * next;
+      y = py - ((py - y) / scale) * next;
+      scale = next;
+      apply();
+    }
+    const zoomCenter = (factor) => { const { w, h } = size(); zoomAt(scale * factor, w / 2, h / 2); };
+    // Fit the diagram. `readableFloor` (the first view) never shrinks it below a
+    // readable size; the "Fit" button does, so the whole diagram is visible.
+    function fit(readableFloor) {
+      const fullscreen = document.fullscreenElement === card;
+      // Height of the viewport follows the diagram (capped); in full screen CSS fills it.
+      viewport.style.height = "";
+      const { w } = size();
+      let s = Math.min(1, w / natW);
+      if (readableFloor) s = Math.max(s, ZOOM_READABLE);
+      if (!fullscreen) {
+        const cap = Math.round(window.innerHeight * 0.7);
+        viewport.style.height = Math.min(cap, Math.max(160, natH * s)) + "px";
       }
-    } catch (e) { holder.textContent = "Diagram error: " + e.message; }
+      const { h } = size();
+      if (fullscreen || !readableFloor) s = Math.min(s, h / natH);
+      scale = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, s));
+      x = 0; y = 0;
+      apply();
+    }
+
+    const btn = (text, title, onClick) => {
+      const b = el("button", { class: "icon-btn zoom-btn", type: "button", title, "aria-label": title, text });
+      b.addEventListener("click", onClick);
+      return b;
+    };
+    const zoomLabel = el("span", { class: "zoom-level" });
+    const toolbar = el("div", { class: "diagram-toolbar" }, [
+      btn("−", T.zoomOut, () => zoomCenter(1 / ZOOM_STEP)),
+      zoomLabel,
+      btn("+", T.zoomIn, () => zoomCenter(ZOOM_STEP)),
+      btn(T.zoomFit, T.zoomFit, () => fit(false)),
+      btn(T.zoomReset, T.zoomReset, () => { const { w, h } = size(); zoomAt(1, w / 2, h / 2); }),
+      card.requestFullscreen ? btn("⛶", T.fullscreen, () => {
+        if (document.fullscreenElement === card) document.exitFullscreen();
+        else card.requestFullscreen().catch(() => {});
+      }) : null,
+    ]);
+    card.insertBefore(toolbar, viewport);
+
+    viewport.addEventListener("wheel", (e) => {
+      const r = viewport.getBoundingClientRect();
+      if (e.ctrlKey || e.metaKey) {
+        // Trackpad pinch arrives as a wheel event with ctrlKey set.
+        e.preventDefault();
+        zoomAt(scale * Math.exp(-e.deltaY * 0.01), e.clientX - r.left, e.clientY - r.top);
+        return;
+      }
+      const beforeX = x, beforeY = y;
+      x -= e.deltaX; y -= e.deltaY;
+      apply();
+      if (x !== beforeX || y !== beforeY) e.preventDefault();
+    }, { passive: false });
+
+    // Safari (macOS) reports trackpad pinch as gesture events, not ctrl + wheel.
+    let gestureStart = 1;
+    viewport.addEventListener("gesturestart", (e) => { e.preventDefault(); gestureStart = scale; });
+    viewport.addEventListener("gesturechange", (e) => {
+      e.preventDefault();
+      const r = viewport.getBoundingClientRect();
+      zoomAt(gestureStart * e.scale, e.clientX - r.left, e.clientY - r.top);
+    });
+
+    // Drag to pan (mouse, pen, one finger) and two-finger pinch on touch screens.
+    // The pointer is captured only once it really moves, so a plain click still
+    // reaches the diagram node under it and opens its change.
+    const pointers = new Map();
+    let drag = null, pinch = null, dragged = false;
+    const DRAG_THRESHOLD = 4;
+    viewport.addEventListener("pointerdown", (e) => {
+      if (e.pointerType === "mouse" && e.button !== 0) return;
+      pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      dragged = false;
+      if (pointers.size === 1) drag = { id: e.pointerId, sx: e.clientX, sy: e.clientY, x0: x, y0: y };
+      if (pointers.size === 2) {
+        const [a, b] = [...pointers.values()];
+        pinch = { dist: Math.hypot(a.x - b.x, a.y - b.y), scale0: scale };
+        drag = null;
+      }
+    });
+    viewport.addEventListener("pointermove", (e) => {
+      if (!pointers.has(e.pointerId)) return;
+      pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (pinch && pointers.size === 2) {
+        const [a, b] = [...pointers.values()];
+        const r = viewport.getBoundingClientRect();
+        dragged = true;
+        zoomAt(pinch.scale0 * (Math.hypot(a.x - b.x, a.y - b.y) / (pinch.dist || 1)),
+          (a.x + b.x) / 2 - r.left, (a.y + b.y) / 2 - r.top);
+        return;
+      }
+      if (!drag || drag.id !== e.pointerId) return;
+      const dx = e.clientX - drag.sx, dy = e.clientY - drag.sy;
+      if (!dragged && Math.hypot(dx, dy) < DRAG_THRESHOLD) return;
+      if (!dragged) { dragged = true; viewport.setPointerCapture(e.pointerId); viewport.classList.add("dragging"); }
+      x = drag.x0 + dx; y = drag.y0 + dy;
+      apply();
+    });
+    const release = (e) => {
+      pointers.delete(e.pointerId);
+      if (pointers.size < 2) pinch = null;
+      if (drag && drag.id === e.pointerId) drag = null;
+      viewport.classList.remove("dragging");
+    };
+    viewport.addEventListener("pointerup", release);
+    viewport.addEventListener("pointercancel", release);
+    // A drag that ends on a node must not also count as a click on it.
+    viewport.addEventListener("click", (e) => { if (dragged) { e.stopPropagation(); e.preventDefault(); dragged = false; } }, true);
+
+    // Refit on entering/leaving full screen. A re-render drops the card, so the
+    // listener removes itself the first time it finds the card gone.
+    const onFullscreen = () => {
+      if (!card.isConnected) { document.removeEventListener("fullscreenchange", onFullscreen); return; }
+      requestAnimationFrame(() => fit(document.fullscreenElement !== card));
+    };
+    document.addEventListener("fullscreenchange", onFullscreen);
+    fit(true);
   }
 
   // The Mermaid node id of a drawn node. Some renderers set data-id; the classic
@@ -427,10 +684,31 @@
     return m ? m[1] : null;
   }
 
-  function linkDiagramNodes(holder, links) {
+  // The file a drawn node names in its label ("…<br/>billing-clock.service.ts:168").
+  // Each label line is its own text node, so lines are matched one at a time.
+  function fileNamedInNode(node) {
+    const walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT);
+    while (walker.nextNode()) {
+      for (const m of walker.currentNode.nodeValue.matchAll(MENTION_RE)) {
+        const idx = resolveFileMention(m[0]);
+        if (idx != null) return idx;
+      }
+    }
+    return null;
+  }
+
+  // Every node that maps to a changed file highlights it in the tree on hover —
+  // through its link when it has one, else through the file its label names.
+  // Linked nodes also open their change.
+  function wireDiagramNodes(holder, links) {
     holder.querySelectorAll("g.node").forEach((node) => {
       const id = diagramNodeId(node);
       const target = id && links[id] ? resolveTarget(links[id]) : null;
+      const fileIdx = target ? target.fileIdx : fileNamedInNode(node);
+      if (fileIdx != null) {
+        markFileRef(node, fileIdx, false);
+        node.classList.add("file-node");
+      }
       if (!target) return;
       node.classList.add("clickable-node");
       node.setAttribute("role", "button");
@@ -442,9 +720,11 @@
     });
   }
 
-  function renderOverview() {
+  // `scrollTop` puts the reader back where they were (returning from a file, or a
+  // re-render after a theme change). It is applied again once the diagrams are
+  // drawn, because drawing them changes the page height.
+  function renderOverview(scrollTop) {
     current = -1;
-    if (location.hash) history.replaceState(null, "", location.pathname + location.search);
     const view = el("div", { class: "view" });
     const prose = el("div", { class: "prose" });
     prose.appendChild(el("h1", { text: analysis.title || "Recap" }));
@@ -454,9 +734,10 @@
     // "What changes" and the flow are the two clickable maps into the code, so
     // they sit together; the architecture diagram follows (all optional).
     renderChanges(view);
-    if (analysis.flow) renderDiagram(view, analysis.flow.title || T.codeFlow, analysis.flow.diagram, analysis.flow.links);
+    const drawn = [];
+    if (analysis.flow) drawn.push(renderDiagram(view, analysis.flow.title || T.codeFlow, analysis.flow.diagram, analysis.flow.links));
     if (analysis.overview) {
-      renderDiagram(view, analysis.overview.diagramTitle, analysis.overview.diagram, analysis.overview.links);
+      drawn.push(renderDiagram(view, analysis.overview.diagramTitle, analysis.overview.diagram, analysis.overview.links));
     }
 
     // commits
@@ -477,7 +758,7 @@
     const h = el("h2"); h.textContent = T.changedFiles; view.appendChild(h);
     const grid = el("div", { class: "overview-files" });
     DATA.files.forEach((f, idx) => {
-      const card = el("div", { class: "ov-card", onclick: () => selectFile(idx) }, [
+      const card = el("div", { class: "ov-card", "data-file-ref": String(idx), onclick: () => navigate(idx) }, [
         el("div", { class: "ov-path", text: f.path }),
         el("div", { class: "ov-meta" }, [
           el("span", { class: "chip " + f.status, text: f.status[0].toUpperCase() }),
@@ -493,6 +774,10 @@
     view.appendChild(grid);
     show(view);
     setActiveNav(-1);
+    if (scrollTop) {
+      content().scrollTop = scrollTop;
+      Promise.all(drawn).then(() => { if (current === -1) content().scrollTop = scrollTop; });
+    }
   }
 
   function renderFile(idx) {
@@ -500,6 +785,7 @@
     const af = analysisFiles[f.path] || {};
     const view = el("div", { class: "view" });
 
+    view.appendChild(el("button", { class: "back-link", type: "button", text: T.backToOverview, onclick: () => navigate(-1) }));
     const head = el("div", { class: "file-head" }, [
       el("div", { class: "file-path" }, [
         el("span", { class: "chip " + f.status, text: f.status[0].toUpperCase() }),
@@ -706,7 +992,7 @@
     const closeBtn = el("button", { class: "icon-btn modal-close", type: "button", "aria-label": T.close, title: T.close, text: "✕" });
     closeBtn.addEventListener("click", closeModal);
     const toFile = el("button", { class: "icon-btn", type: "button", text: T.openFileView });
-    toFile.addEventListener("click", () => { closeModal(); selectFile(target.fileIdx); });
+    toFile.addEventListener("click", () => { closeModal(); navigate(target.fileIdx); });
 
     const position = f.hunks.length ? `${T.changeOf} ${target.hunkIdx + 1}/${f.hunks.length}` : "";
     const dialog = el("div", { class: "modal", role: "dialog", "aria-modal": "true", "aria-label": f.path }, [
@@ -723,6 +1009,7 @@
       ]),
       body,
     ]);
+    linkFileMentions(dialog);
     const backdrop = el("div", { class: "modal-backdrop", id: "rc-modal" }, [dialog]);
     // Close only on a click on the backdrop itself, not on one that bubbled up from the dialog.
     backdrop.addEventListener("click", (e) => { if (e.target === backdrop) closeModal(); });
@@ -740,8 +1027,16 @@
     if (!target) return el("span", { class: cls || "" }, children);
     return el("button", {
       class: "change-link " + (cls || ""), type: "button",
+      "data-file-ref": String(target.fileIdx),
       onclick: () => openChangeModal(target),
     }, children);
+  }
+
+  // The path printed beside a point's title; a reference to its file when it resolves.
+  function pointFile(path) {
+    const node = el("code", { class: "point-file", text: path });
+    const idx = fileIndexByPath.get(path);
+    return idx == null ? node : markFileRef(node, idx, true);
   }
 
   // ---------- "What changes": problem, numbered points, what it does not cover ----------
@@ -763,7 +1058,7 @@
         const li = el("li");
         const head = el("div", { class: "point-head" }, [
           changeLink({ file: p.file, hunk: p.hunk, lines: p.lines }, [el("span", { class: "point-title", text: p.title || p.file || "" })], "point-link"),
-          p.file ? el("code", { class: "point-file", text: p.file }) : null,
+          p.file ? pointFile(p.file) : null,
         ]);
         li.appendChild(head);
         const bullets = Array.isArray(p.bullets) ? p.bullets : [];
@@ -792,15 +1087,41 @@
     view.appendChild(sec);
   }
 
-  let current = -1;
-  function selectFile(idx) {
-    current = idx;
-    // Deep link: #file/<idx> so a specific file view is shareable within the artifact.
-    if (location.hash !== "#file/" + idx) history.replaceState(null, "", "#file/" + idx);
-    renderFile(idx);
+  // ---------- routing: the URL hash is the view ----------
+  // "" is the overview, "#file/<n>" a file. Every navigation adds a history entry,
+  // so the browser's Back button returns to the previous view, and a #file/<n>
+  // link stays shareable inside the artifact.
+  let current = null; // index of the file on screen, -1 for the overview, null before the first render
+  let overviewScroll = 0;
+
+  function viewFromHash() {
+    const m = (location.hash || "").match(/^#file\/(\d+)$/);
+    const idx = m ? Number(m[1]) : -1;
+    return idx >= 0 && idx < DATA.files.length ? idx : -1;
   }
+
+  function navigate(idx) {
+    if (idx === current) return;
+    history.pushState(null, "", idx >= 0 ? "#file/" + idx : location.pathname + location.search);
+    route();
+  }
+
+  // Render whatever the URL names. Called on navigation and on Back/Forward; the
+  // guard makes the duplicate event some browsers fire (popstate + hashchange) a no-op.
+  function route() {
+    const idx = viewFromHash();
+    if (idx === current) return;
+    closeModal();
+    if (current === -1) overviewScroll = content().scrollTop;
+    if (idx >= 0) {
+      current = idx;
+      renderFile(idx);
+    } else renderOverview(overviewScroll);
+  }
+
   function setActiveNav(idx) {
     document.querySelectorAll(".nav-item").forEach((n) => n.classList.toggle("active", Number(n.dataset.idx) === idx));
+    if (idx >= 0 && fileTree) fileTree.reveal(idx, true);
   }
 
   // ---------- sidebar ----------
@@ -819,25 +1140,115 @@
     });
     sb.appendChild(el("div", { class: "search-wrap" }, [search]));
 
-    sb.appendChild(el("div", { class: "nav-item", "data-idx": "-1", onclick: renderOverview }, [
+    sb.appendChild(el("div", { class: "nav-item", "data-idx": "-1", onclick: () => navigate(-1) }, [
       el("span", { text: "📋" }),
       el("span", { class: "label", text: T.overview }),
     ]));
     const sectionTitle = el("div", { class: "section-title", text: T.files + " (" + DATA.files.length + ")" });
     sb.appendChild(sectionTitle);
 
-    const items = [];
+    fileTree = buildFileTree(sb);
+    sb.appendChild(fileTree.root);
+
+    // filter: show a file if its path or any diff line matches; badge = hits.
+    // Folders with no matching file disappear; collapsed ones open while searching.
+    function applyFilter() {
+      const q = search.value.trim().toLowerCase();
+      let shown = 0;
+      fileTree.files.forEach(({ row, countBadge }, idx) => {
+        let hits = 0;
+        if (q) {
+          let from = 0;
+          const hay = haystacks[idx];
+          while ((from = hay.indexOf(q, from)) !== -1) { hits++; from += q.length; }
+        }
+        const visible = !q || hits > 0;
+        row.hidden = !visible;
+        countBadge.textContent = q && hits ? String(hits) : "";
+        if (visible) shown++;
+      });
+      fileTree.root.classList.toggle("searching", Boolean(q));
+      fileTree.refreshFolders();
+      sectionTitle.textContent = q ? `${T.files} (${shown}/${DATA.files.length})` : `${T.files} (${DATA.files.length})`;
+    }
+    search.addEventListener("input", applyFilter);
+  }
+
+  // ---------- file tree (GitHub review style) ----------
+  // Only changed files, grouped by folder. A folder whose only child is another
+  // folder is merged with it ("backend/app/engine"), as GitHub does, so a deep
+  // path does not cost one indentation level per segment. Folders first, then
+  // files, each alphabetical.
+  let fileTree = null;
+
+  function treeModel() {
+    const root = { name: "", dirs: new Map(), files: [] };
     DATA.files.forEach((f, idx) => {
-      const slash = f.path.lastIndexOf("/");
-      const dir = slash >= 0 ? f.path.slice(0, slash + 1) : "";
-      const base = slash >= 0 ? f.path.slice(slash + 1) : f.path;
+      const parts = f.path.split("/");
+      let node = root;
+      for (const part of parts.slice(0, -1)) {
+        if (!node.dirs.has(part)) node.dirs.set(part, { name: part, dirs: new Map(), files: [] });
+        node = node.dirs.get(part);
+      }
+      node.files.push({ name: parts[parts.length - 1], idx });
+    });
+    const compact = (dir) => {
+      for (const child of dir.dirs.values()) compact(child);
+      if (dir.name && dir.files.length === 0 && dir.dirs.size === 1) {
+        const only = dir.dirs.values().next().value;
+        dir.name += "/" + only.name;
+        dir.dirs = only.dirs;
+        dir.files = only.files;
+      }
+    };
+    compact(root);
+    return root;
+  }
+
+  const byName = (a, b) => a.name.localeCompare(b.name);
+  const TREE_INDENT = 14;
+
+  function buildFileTree(sidebar) {
+    const files = []; // by file index: { row, countBadge, folders: [wrap…] outermost first }
+    const folders = []; // every folder wrapper, outermost first
+    const root = el("div", { class: "tree", role: "tree" });
+
+    function addDir(dir, parent, depth, ancestors) {
+      const children = el("div", { class: "tree-children", role: "group" });
+      const wrap = el("div", { class: "tree-dir-wrap" });
+      const row = el("div", {
+        class: "tree-dir", role: "treeitem", tabindex: "0", "aria-expanded": "true", title: T.toggleFolder,
+        style: `padding-left:${8 + depth * TREE_INDENT}px`,
+      }, [
+        el("span", { class: "tree-caret", "aria-hidden": "true", text: "▾" }),
+        el("span", { class: "tree-folder", "aria-hidden": "true" }),
+        el("span", { class: "tree-name", text: dir.name }),
+      ]);
+      const toggle = () => {
+        const collapsed = wrap.classList.toggle("collapsed");
+        row.setAttribute("aria-expanded", String(!collapsed));
+      };
+      row.addEventListener("click", toggle);
+      row.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(); }
+      });
+      wrap._row = row;
+      wrap.appendChild(row);
+      wrap.appendChild(children);
+      parent.appendChild(wrap);
+      folders.push(wrap);
+      addChildren(dir, children, depth + 1, ancestors.concat(wrap));
+    }
+
+    function addFile(file, parent, depth, ancestors) {
+      const f = DATA.files[file.idx];
       const countBadge = el("span", { class: "match-count" });
-      const item = el("div", { class: "nav-item", "data-idx": String(idx), onclick: () => selectFile(idx) }, [
+      const row = el("div", {
+        class: "nav-item tree-file", role: "treeitem", "data-idx": String(file.idx), title: f.path,
+        style: `padding-left:${8 + depth * TREE_INDENT + 14}px`, onclick: () => navigate(file.idx),
+      }, [
         el("span", { class: "chip " + f.status, text: f.status[0].toUpperCase() }),
-        el("span", { class: "label" }, [
-          dir ? el("span", { class: "path-dir", text: dir }) : null,
-          document.createTextNode(base),
-        ]),
+        el("span", { class: "label", text: file.name }),
         countBadge,
         el("span", { class: "nstat" }, [
           el("span", { class: "add", text: "+" + (f.insertions || 0) }),
@@ -845,30 +1256,92 @@
           el("span", { class: "del", text: "−" + (f.deletions || 0) }),
         ]),
       ]);
-      items.push({ item, countBadge });
-      sb.appendChild(item);
-    });
-
-    // filter: show a file if its path or any diff line matches; badge = hits.
-    function applyFilter() {
-      const q = search.value.trim().toLowerCase();
-      let shown = 0;
-      items.forEach(({ item, countBadge }, idx) => {
-        if (!q) {
-          item.style.display = "";
-          countBadge.textContent = "";
-          shown++;
-          return;
-        }
-        let from = 0, hits = 0;
-        const hay = haystacks[idx];
-        while ((from = hay.indexOf(q, from)) !== -1) { hits++; from += q.length; }
-        if (hits > 0) { item.style.display = ""; countBadge.textContent = String(hits); shown++; }
-        else { item.style.display = "none"; countBadge.textContent = ""; }
-      });
-      sectionTitle.textContent = q ? `${T.files} (${shown}/${DATA.files.length})` : `${T.files} (${DATA.files.length})`;
+      parent.appendChild(row);
+      files[file.idx] = { row, countBadge, folders: ancestors };
     }
-    search.addEventListener("input", applyFilter);
+
+    function addChildren(dir, parent, depth, ancestors) {
+      [...dir.dirs.values()].sort(byName).forEach((d) => addDir(d, parent, depth, ancestors));
+      [...dir.files].sort(byName).forEach((f) => addFile(f, parent, depth, ancestors));
+    }
+    addChildren(treeModel(), root, 0, []);
+
+    // A folder is hidden when the search filter hid every file inside it.
+    function refreshFolders() {
+      for (const wrap of folders) {
+        wrap.hidden = !wrap.querySelector(".tree-file:not([hidden])");
+      }
+    }
+
+    // The row that stands for a file on screen: the file itself, or the outermost
+    // collapsed folder that hides it (unless searching, which opens every folder).
+    function visibleRowFor(idx) {
+      const entry = files[idx];
+      if (!root.classList.contains("searching")) {
+        const closed = entry.folders.find((w) => w.classList.contains("collapsed"));
+        if (closed) return closed._row;
+      }
+      return entry.row;
+    }
+
+    // Scroll the sidebar (only the sidebar) so `row` sits in view below the
+    // sticky search box. scrollIntoView is avoided: it also scrolls the content pane.
+    function scrollToRow(row) {
+      if (row.hidden || !row.offsetParent) return;
+      const box = sidebar.getBoundingClientRect();
+      const r = row.getBoundingClientRect();
+      const head = sidebar.querySelector(".search-wrap");
+      const top = box.top + (head ? head.offsetHeight : 0);
+      if (r.top >= top && r.bottom <= box.bottom) return;
+      const visibleMiddle = top + (box.bottom - top) / 2;
+      sidebar.scrollBy({ top: r.top + r.height / 2 - visibleMiddle, behavior: "smooth" });
+    }
+
+    // The file a reference points at, lit up in the tree: its row, and the
+    // folders on its path, so its place in the structure is visible at a glance.
+    function highlight(idx, on) {
+      const entry = files[idx];
+      if (!entry) return;
+      entry.row.classList.toggle("tree-hl", on);
+      entry.folders.forEach((w) => w._row.classList.toggle("tree-hl-path", on));
+      if (on) scrollToRow(visibleRowFor(idx));
+    }
+
+    // The file on screen: open the folders that hide it and bring it into view.
+    function reveal(idx, expand) {
+      const entry = files[idx];
+      if (!entry) return;
+      if (expand) {
+        entry.folders.forEach((w) => {
+          w.classList.remove("collapsed");
+          w._row.setAttribute("aria-expanded", "true");
+        });
+      }
+      scrollToRow(visibleRowFor(idx));
+    }
+
+    return { root, files, refreshFolders, highlight, reveal };
+  }
+
+  // ---------- hover a reference → highlight its file in the tree ----------
+  let hoveredFile = null;
+  function setHoveredFile(idx) {
+    if (idx === hoveredFile || !fileTree) return;
+    if (hoveredFile != null) fileTree.highlight(hoveredFile, false);
+    hoveredFile = idx;
+    if (idx != null) fileTree.highlight(idx, true);
+  }
+  function fileRefAt(node) {
+    const ref = node && node.closest ? node.closest("[data-file-ref]") : null;
+    return ref ? Number(ref.getAttribute("data-file-ref")) : null;
+  }
+  // One delegated listener covers every reference, including the ones rendered
+  // later (a re-render, the modal, diagram nodes drawn asynchronously).
+  function wireFileRefHover() {
+    document.addEventListener("mouseover", (e) => setHoveredFile(fileRefAt(e.target)));
+    document.addEventListener("mouseout", (e) => { if (!e.relatedTarget) setHoveredFile(null); });
+    document.addEventListener("focusin", (e) => setHoveredFile(fileRefAt(e.target)));
+    document.addEventListener("focusout", (e) => { if (!e.relatedTarget) setHoveredFile(null); });
   }
 
   // ---------- topbar controls ----------
@@ -902,7 +1375,8 @@
     if (!window.mermaid) return;
     const dark = document.documentElement.getAttribute("data-theme") !== "light";
     window.mermaid.initialize({ startOnLoad: false, theme: dark ? "dark" : "default", securityLevel: "loose" });
-    if (current < 0) renderOverview();
+    // Redraw the diagrams in the new theme without losing the reader's place.
+    if (current === -1) renderOverview(content().scrollTop);
   }
 
   // ---------- boot ----------
@@ -913,6 +1387,7 @@
     }
     buildTopbar();
     buildSidebar();
+    wireFileRefHover();
     document.addEventListener("keydown", (e) => {
       if (e.key === "Escape" && document.getElementById("rc-modal")) closeModal();
     });
@@ -920,10 +1395,10 @@
       show(el("div", { class: "empty", text: T.noChanges }));
       return;
     }
-    // Honor a deep link like #file/2 on load; otherwise show the overview.
-    const m = (location.hash || "").match(/^#file\/(\d+)$/);
-    const idx = m ? Number(m[1]) : -1;
-    if (idx >= 0 && idx < DATA.files.length) selectFile(idx);
-    else renderOverview();
+    // Back/Forward and a hash typed into the address bar both land in route().
+    window.addEventListener("popstate", route);
+    window.addEventListener("hashchange", route);
+    // Honors a deep link like #file/2 on load; otherwise shows the overview.
+    route();
   });
 })();
