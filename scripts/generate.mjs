@@ -10,6 +10,7 @@
 //   --data      Facts file from collect.mjs.   Default: recap-data.json
 //   --analysis  AI analysis file (optional).    Default: analysis.json
 //   --out       Output HTML.                    Default: recap.html
+//   --decisions Decision log.                  Default: <repo>/.recap/choices/<branch>.md
 //   --open      Open the result in the default browser when done.
 //   --allow-incomplete  Write the HTML even when validate.mjs reports errors (drafts only).
 
@@ -17,8 +18,9 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { execFile } from "node:child_process";
 import path from "node:path";
-import { recapDir } from "./paths.mjs";
-import { validateAnalysis, report } from "./validate.mjs";
+import { recapDir, choicesFile } from "./paths.mjs";
+import { validateRecap, report, TEST_FILE } from "./validate.mjs";
+import { readDecisions } from "./decisions.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ASSETS = path.resolve(__dirname, "..", "assets");
@@ -33,6 +35,7 @@ function parseArgs(argv) {
     const k = argv[i];
     if (k === "--data") a.data = argv[++i];
     else if (k === "--analysis") a.analysis = argv[++i];
+    else if (k === "--decisions") a.decisions = argv[++i];
     else if (k === "--out") a.out = argv[++i];
     else if (k === "--open") a.open = true;
     else if (k === "--allow-incomplete") a.allowIncomplete = true;
@@ -71,7 +74,7 @@ function openInBrowser(file) {
 function main() {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) {
-    console.log("Usage: node generate.mjs [--data f] [--analysis f] [--out f] [--open]");
+    console.log("Usage: node generate.mjs [--data f] [--analysis f] [--decisions f] [--out f] [--open]");
     return;
   }
 
@@ -89,15 +92,24 @@ function main() {
     process.exit(1);
   }
   const analysis = readJSON(analysisPath, {});
+  // The decision log is read as written, never authored here (see decisions.mjs).
+  const decisionsPath = args.decisions || choicesFile();
+  const log = readDecisions(decisionsPath);
+  console.log(log.found
+    ? `Decision log: ${decisionsPath} (${log.decisions.length} decision(s)).`
+    : `No decision log at ${decisionsPath} — the "Decisions" block is omitted.`);
 
   // An incomplete analysis renders quietly wrong (unlinked bullets, files with no
   // "what it does" column), so it is refused here unless explicitly allowed.
-  const ok = report(validateAnalysis(data, analysis));
+  const ok = report(validateRecap(data, analysis, log));
   if (!ok && !args.allowIncomplete) {
     console.error("Not writing recap.html. Pass --allow-incomplete only for a draft you will finish.");
     process.exit(1);
   }
   data.analysis = analysis;
+  data.decisions = log.decisions;
+  // The viewer tones test files down in the tree; the rule lives in validate.mjs.
+  for (const f of data.files) f.isTest = TEST_FILE.test(f.path);
   const lang = (analysis.lang || "en").replace(/[^a-zA-Z-]/g, "") || "en";
 
   const css = readAsset("viewer.css");
@@ -121,6 +133,7 @@ function main() {
 <body>
 <div class="app">
   <header class="topbar">
+    <button class="icon-btn" id="rc-sidebar" aria-controls="sidebar" aria-expanded="true">&#9776;</button>
     <div>
       <div class="title" id="rc-title">Recap</div>
       <div class="meta" id="rc-meta"></div>
@@ -136,6 +149,7 @@ function main() {
   </header>
   <div class="body">
     <nav class="sidebar" id="sidebar"></nav>
+    <div class="sidebar-resizer" id="rc-resizer" role="separator" aria-orientation="vertical" aria-controls="sidebar" tabindex="0"></div>
     <main class="content" id="content"></main>
   </div>
 </div>

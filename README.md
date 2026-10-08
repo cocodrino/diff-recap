@@ -53,12 +53,23 @@ keep your current one, or pick Opus / Sonnet / Haiku to trade quality for speed.
 
 ![Model selector](images/model-selector-en.png)
 
+### 6. 🧭 Decisions made — who chose what, and why
+
+The diff shows *what* changed; it can't show which alternatives were on the
+table. With the companion skill **`diff-recap-choices`**, the agent logs every
+decision the moment it closes — the options weighed, the one chosen, the reason,
+and whether **you** or **the agent** decided — in
+`.recap/choices/<branch>.md`. That file is committed, so it travels in the PR,
+and the recap shows it as a **Decisions made** block.
+
 ### …and the rest
 
-A full overview (summary + diagram + commits + file grid), **word-level diff
-highlighting** (only the tokens that actually changed light up), split/unified
-toggle, light/dark theme, English & Spanish UI, and shareable deep links
-(`recap.html#file/2`).
+A full overview (summary + diagrams + decisions + commits), a **file tree
+sidebar** like a GitHub review (fixed, resizable, hideable; tests toned down),
+**hover any file mention to find it in the tree**, **pan & zoom** on diagrams,
+**word-level diff highlighting** (only the tokens that actually changed light
+up), split/unified toggle, light/dark theme, English & Spanish UI, and shareable
+deep links (`recap.html#file/2`) that work with the browser's Back button.
 
 ![Word-level diff](images/word-diff.png)
 
@@ -70,15 +81,52 @@ toggle, light/dark theme, English & Spanish UI, and shareable deep links
 
 It's a Claude Code (and compatible) Agent Skill — no `npm install`, no build.
 
+This repo holds **two skills**:
+
+| Skill | What it does |
+|---|---|
+| `diff-recap` | Builds the recap (`/diff-recap`). |
+| `diff-recap-choices` | Logs decisions while you work, for the recap's **Decisions made** block. |
+
 ```bash
-# available everywhere
+# 1. diff-recap — available everywhere
 git clone git@github.com:cocodrino/diff-recap.git ~/.claude/skills/diff-recap
+
+# 2. diff-recap-choices — lives inside the same clone; agents only discover
+#    skills one level under ~/.claude/skills/, so link it there
+ln -s ~/.claude/skills/diff-recap/diff-recap-choices ~/.claude/skills/diff-recap-choices
 ```
 
 Restart your agent, then run `/diff-recap` inside any git repo. It asks which
 model to use, then builds the recap for you.
 
-Prefer it scoped to one project? Clone into `.claude/skills/diff-recap` instead.
+Prefer it scoped to one project? Clone into `<project>/.claude/skills/diff-recap`
+and link `<project>/.claude/skills/diff-recap-choices` the same way.
+
+### Make the decision log work
+
+**a) Let git commit the log.** Recaps are generated files and should be ignored,
+but the decision logs must be committed. Git can't re-include a file inside an
+ignored folder, so ignore the folder's *contents*:
+
+```gitignore
+.recap/*
+!.recap/choices/
+```
+
+**b) Make the agent log decisions on its own.** A skill only loads when the
+agent thinks a task matches it, and "we just decided something" happens in the
+middle of other work. Add one always-on line to your `~/.claude/CLAUDE.md` (or
+the project's) so it never forgets:
+
+```markdown
+- When a choice between real alternatives closes on a branch (I pick an option
+  you offered, or you pick one yourself), log it right away with the
+  `diff-recap-choices` skill before moving on.
+```
+
+Check a log any time with `node ~/.claude/skills/diff-recap/scripts/decisions.mjs`
+(prints the current branch's log path and validates it).
 
 ---
 
@@ -105,7 +153,8 @@ offline.
 3. generate.mjs  merge       ──▶  recap.html        (one self-contained file)
 ```
 
-Everything lands together in `<repo-root>/.recap/<branch>/`.
+Everything lands together in `<repo-root>/.recap/<branch>/`. The decision log,
+if any, is read from `<repo-root>/.recap/choices/<branch>.md`.
 
 ### Manual usage (without the skill)
 

@@ -19,7 +19,7 @@
 import { execFileSync } from "node:child_process";
 import { writeFileSync, mkdirSync, readFileSync, existsSync } from "node:fs";
 import path from "node:path";
-import { recapDir, branchSlug, repoRoot } from "./paths.mjs";
+import { recapDir, branchSlug, repoRoot, CHOICES_DIR } from "./paths.mjs";
 
 // The viewer's "full file" view shows the NEW version of each changed file with
 // the changed lines marked. Files longer than this keep only their hunks, so one
@@ -238,13 +238,18 @@ function main() {
     logRange = `${base}..${head}`;
   }
 
+  // The decision log rides in the PR but is shown as its own block, not as a
+  // changed file. Pathspecs are relative to the repo root (":/"), so this works
+  // from any subdirectory.
+  const paths = ["--", ":/", `:(top,exclude)${CHOICES_DIR}`];
+
   // -M turns on rename detection so a moved file reads as one renamed entry
   // instead of an add+remove pair.
-  const diffText = git(["diff", "--no-color", "-M", ctx, ...spec]);
+  const diffText = git(["diff", "--no-color", "-M", ctx, ...spec, ...paths]);
   const files = parseDiff(diffText);
 
   // Per-file numstat for accurate insertion/deletion counts.
-  const numstat = gitSafe(["diff", "--no-color", "-M", "--numstat", ...spec]);
+  const numstat = gitSafe(["diff", "--no-color", "-M", "--numstat", ...spec, ...paths]);
   const numByPath = {};
   for (const row of numstat.split("\n")) {
     if (!row.trim()) continue;

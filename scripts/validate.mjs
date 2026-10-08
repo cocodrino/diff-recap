@@ -13,11 +13,13 @@
 import { readFileSync, existsSync, realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
-import { recapDir } from "./paths.mjs";
+import { recapDir, choicesFile } from "./paths.mjs";
+import { readDecisions, validateDecisionFiles } from "./decisions.mjs";
 
 // Files that do not need plain-language steps: tests describe themselves, and a
-// reviewer reads them for coverage, not for intent.
-const TEST_FILE = /(^|\/)(__tests__|__mocks__|e2e)\/|\.(test|spec)\.[^/]+$/;
+// reviewer reads them for coverage, not for intent. generate.mjs reuses it to
+// tag test files for the viewer, so the two never disagree on what a test is.
+export const TEST_FILE = /(^|\/)(__tests__|__mocks__|e2e)\/|\.(test|spec)\.[^/]+$/;
 
 // A line with nothing to explain: blank, only punctuation, or a comment (the
 // comment IS the explanation; steps describe what the code does).
@@ -169,15 +171,27 @@ function readJSON(file) {
   return existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : null;
 }
 
+// Everything the recap renders that is not a git fact: the analysis and the
+// decision log (`log` from readDecisions). A malformed log fails like a
+// malformed analysis — a decision without its reason is the defect the log
+// exists to prevent.
+export function validateRecap(data, analysis, log) {
+  const result = validateAnalysis(data, analysis);
+  return {
+    errors: [...result.errors, ...log.errors.map((e) => `choices log: ${e}`)],
+    warnings: [...result.warnings, ...validateDecisionFiles(data, log.decisions).map((w) => `choices log: ${w}`)],
+  };
+}
+
 // Print a report; returns true when there are no errors.
 export function report({ errors, warnings }) {
   for (const w of warnings) console.warn(`  warning: ${w}`);
   for (const e of errors) console.error(`  error:   ${e}`);
   if (errors.length) {
-    console.error(`\nanalysis.json has ${errors.length} error(s). Fix them and run again.`);
+    console.error(`\nThe recap inputs have ${errors.length} error(s). Fix them and run again.`);
     return false;
   }
-  console.log(`analysis.json is complete${warnings.length ? ` (${warnings.length} warning(s))` : ""}.`);
+  console.log(`Recap inputs are complete${warnings.length ? ` (${warnings.length} warning(s))` : ""}.`);
   return true;
 }
 
@@ -201,5 +215,6 @@ if (isMainModule()) {
   const data = readJSON(dataPath);
   if (!data) { console.error(`Error: data file not found: ${dataPath}`); process.exit(1); }
   const analysis = readJSON(analysisPath) || {};
-  process.exit(report(validateAnalysis(data, analysis)) ? 0 : 1);
+  const log = readDecisions(arg("--decisions") || choicesFile());
+  process.exit(report(validateRecap(data, analysis, log)) ? 0 : 1);
 }

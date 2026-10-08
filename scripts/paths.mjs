@@ -27,5 +27,16 @@ export function repoRoot() {
 // Per-branch recap directory, anchored at the repo root so it is the same
 // regardless of which subdirectory the command runs from.
 export function recapDir() {
-  return path.join(repoRoot(), ".recap", branchSlug());
+  // A branch literally named "choices" must not write its generated recap into
+  // the committed decision-log folder.
+  const slug = branchSlug();
+  return path.join(repoRoot(), ".recap", slug === path.basename(CHOICES_DIR) ? `${slug}-branch` : slug);
+}
+
+// The branch's decision log. Unlike the generated recap it is COMMITTED (it
+// travels with the PR), so the repo must ignore `.recap/*` but not
+// `.recap/choices/`. Repo-relative form, for git pathspecs.
+export const CHOICES_DIR = ".recap/choices";
+export function choicesFile() {
+  return path.join(repoRoot(), CHOICES_DIR, branchSlug() + ".md");
 }

@@ -331,7 +331,10 @@ user. That path IS the deliverable.
 
 - **Overview**: the exhaustive summary, **What changes** (problem, numbered
   points, what it does not cover), the **code flow** and architecture diagrams,
-  the commit list, and a clickable grid of changed files.
+  **Decisions made** (from the decision log, see below) and the commit list.
+- **Decisions made**: one card per logged decision — who decided (user or
+  agent), the context, every option weighed with the chosen one marked, the
+  reason, and the files it landed in (hover → tree, click → file view).
 - **"What it does" column**: beside the code, each step of the change explained
   in plain words (`files[path].steps`). Clicking a step focuses its lines (the
   rest of that diff and the other steps recede); clicking it again clears it.
@@ -347,8 +350,11 @@ user. That path IS the deliverable.
   annotation above a **side-by-side diff** (old vs. new, line-numbered).
 - **File tree sidebar** (GitHub review style): only the changed files, grouped
   by folder, single-child folders merged (`backend/app`), folders collapsible,
-  search filters files and folders. The sidebar stays fixed and resizable; only
-  the content pane scrolls.
+  search filters files and folders. Test files (same rule as `validate.mjs`'s
+  `TEST_FILE`) are toned down so the code under review stands out. The sidebar
+  stays fixed while the content pane scrolls; drag its border to resize
+  (double-click resets, arrow keys work on the focused handle) and hide it with
+  the ☰ button. Width and hidden state are remembered per browser.
 - **Hover a file reference → highlight it in the tree.** Every mention of a
   changed file — a path or bare file name in the prose (`schema.ts`,
   `daily.function.ts:148`), the file beside a point, a change link, a file card,
@@ -363,11 +369,38 @@ user. That path IS the deliverable.
   is a history entry: the browser's Back button and the "← Overview" link return
   to the overview at the scroll position the reader left.
 
+## Decision Log (`.recap/choices/<branch>.md`)
+
+A committed Markdown file, one per branch, that records every decision taken
+while building the change: which alternatives were weighed, which one won, why,
+and **who decided** (`user` or `agent`). It travels in the PR, so reviewers read
+it on GitHub too, and the recap renders it as the **Decisions made** block.
+
+**Who writes it — and who never does.** The `diff-recap-choices` skill
+(in this same repo, `diff-recap-choices/SKILL.md`) owns the format and the
+rules for writing it: the agent working on the branch logs each decision the
+moment it closes. That skill is the single source of truth for the format; the
+parser is `scripts/decisions.mjs`.
+
+The recap **never** writes or edits the log. A recap sub-agent reads only the
+diff and would invent plausible alternatives and authors — exactly what this
+skill forbids. If the file is missing, the block is simply omitted.
+
+- `validate.mjs` / `generate.mjs` refuse a malformed log, naming the decision;
+  files it names that are not in the diff are shown unlinked (warning).
+- `collect.mjs` excludes `.recap/choices/` from the diff, so the log shows as
+  its own block, not as a changed file.
+
 ## Notes
 
 - Requires Node.js and `git`. Must be run inside a git repository.
-- Recap artifacts land in `<repo-root>/.recap/`. Suggest adding `.recap/` to
-  `.gitignore` so generated recaps (and the ~3 MB HTML) are not committed.
+- Recap artifacts land in `<repo-root>/.recap/`. Ignore the generated recaps but
+  keep the decision logs committed — git cannot re-include a file under an
+  ignored directory, so the rule must ignore the directory's CONTENTS:
+  ```gitignore
+  .recap/*
+  !.recap/choices/
+  ```
 - `assets/mermaid.min.js` is vendored so diagrams render offline. If it is
   missing, the recap still generates but diagrams are skipped (the generator
   warns).

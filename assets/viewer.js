@@ -17,7 +17,7 @@
   const LABELS = {
     en: {
       overview: "Overview", files: "Files", commits: "Commits",
-      changedFiles: "Changed files", whyFile: "Why this file changed", ai: "AI",
+      whyFile: "Why this file changed", ai: "AI",
       complex: "Complex", detailed: "Detailed explanation", codeFlow: "Code flow",
       searchPlaceholder: "Search files & code…",
       filesCount: "files", split: "Split", unified: "Unified",
@@ -38,11 +38,16 @@
       backToOverview: "← Overview", toggleFolder: "Collapse / expand folder",
       zoomIn: "Zoom in", zoomOut: "Zoom out", zoomFit: "Fit", zoomReset: "100%",
       fullscreen: "Full screen",
+      toggleSidebar: "Show / hide the file tree", resizeSidebar: "Drag to resize · double-click to reset",
+      testFile: "test",
       zoomHint: "Pinch or Ctrl + scroll to zoom · drag or scroll to move.",
+      decisions: "Decisions made", decidedByUser: "Decided by the user", decidedByAgent: "Decided by the agent",
+      decisionContext: "Context", decisionOptions: "Options", decisionChosen: "chosen",
+      decisionReason: "Why", decisionFiles: "Where it landed",
     },
     es: {
       overview: "Resumen", files: "Archivos", commits: "Commits",
-      changedFiles: "Archivos modificados", whyFile: "Por qué cambió este archivo", ai: "IA",
+      whyFile: "Por qué cambió este archivo", ai: "IA",
       complex: "Complejo", detailed: "Explicación detallada", codeFlow: "Flujo del código",
       searchPlaceholder: "Buscar archivos y código…",
       filesCount: "archivos", split: "Lado a lado", unified: "Unificado",
@@ -63,7 +68,12 @@
       backToOverview: "← Resumen", toggleFolder: "Plegar / desplegar carpeta",
       zoomIn: "Acercar", zoomOut: "Alejar", zoomFit: "Ajustar", zoomReset: "100%",
       fullscreen: "Pantalla completa",
+      toggleSidebar: "Mostrar / ocultar el árbol de archivos", resizeSidebar: "Arrastra para cambiar el ancho · doble clic lo restablece",
+      testFile: "test",
       zoomHint: "Pellizca o usa Ctrl + rueda para ampliar · arrastra o desliza para moverte.",
+      decisions: "Decisiones tomadas", decidedByUser: "La tomó el usuario", decidedByAgent: "La tomó el agente",
+      decisionContext: "Contexto", decisionOptions: "Opciones", decisionChosen: "elegida",
+      decisionReason: "Por qué", decisionFiles: "Dónde quedó",
     },
   };
   const langBase = String(analysis.lang || "en").toLowerCase().split("-")[0];
@@ -740,6 +750,8 @@
       drawn.push(renderDiagram(view, analysis.overview.diagramTitle, analysis.overview.diagram, analysis.overview.links));
     }
 
+    renderDecisions(view);
+
     // commits
     if (DATA.commits && DATA.commits.length) {
       view.appendChild(el("h2", { class: "", text: T.commits }, []));
@@ -754,24 +766,6 @@
       view.appendChild(list);
     }
 
-    // changed-files grid
-    const h = el("h2"); h.textContent = T.changedFiles; view.appendChild(h);
-    const grid = el("div", { class: "overview-files" });
-    DATA.files.forEach((f, idx) => {
-      const card = el("div", { class: "ov-card", "data-file-ref": String(idx), onclick: () => navigate(idx) }, [
-        el("div", { class: "ov-path", text: f.path }),
-        el("div", { class: "ov-meta" }, [
-          el("span", { class: "chip " + f.status, text: f.status[0].toUpperCase() }),
-          el("span", { class: "nstat" }, [
-            el("span", { class: "add", text: "+" + (f.insertions || 0) }),
-            document.createTextNode(" "),
-            el("span", { class: "del", text: "−" + (f.deletions || 0) }),
-          ]),
-        ]),
-      ]);
-      grid.appendChild(card);
-    });
-    view.appendChild(grid);
     show(view);
     setActiveNav(-1);
     if (scrollTop) {
@@ -1032,6 +1026,64 @@
     }, children);
   }
 
+  // ---------- "Decisions": the branch's decision log, as written during the work ----------
+  // One card per decision: who decided, the context, every option weighed (the
+  // chosen one marked) and the reason. The data comes from
+  // .recap/choices/<branch>.md, parsed by generate.mjs; nothing is inferred here.
+  function renderDecisions(view) {
+    const decisions = Array.isArray(DATA.decisions) ? DATA.decisions : [];
+    if (!decisions.length) return;
+    const sec = el("section", { class: "decisions" });
+    sec.appendChild(el("h2", { text: `${T.decisions} (${decisions.length})` }));
+    decisions.forEach((d, i) => {
+      const byUser = d.decidedBy === "user";
+      const card = el("article", { class: "decision" });
+      card.appendChild(el("div", { class: "decision-head" }, [
+        el("span", { class: "decision-num", text: String(i + 1) }),
+        el("h3", { class: "decision-title", html: md(d.title).replace(/^<p>|<\/p>$/g, "") }),
+        el("span", { class: "decided-by " + (byUser ? "by-user" : "by-agent"), text: byUser ? T.decidedByUser : T.decidedByAgent }),
+        d.date ? el("span", { class: "decision-date", text: d.date }) : null,
+      ]));
+      if (d.context) {
+        card.appendChild(el("h4", { text: T.decisionContext }));
+        card.appendChild(el("div", { class: "prose", html: md(d.context) }));
+      }
+      card.appendChild(el("h4", { text: T.decisionOptions }));
+      const opts = el("div", { class: "decision-options" });
+      for (const o of d.options) {
+        const chosen = o.key === d.chosen;
+        opts.appendChild(el("div", { class: "decision-option" + (chosen ? " chosen" : "") }, [
+          el("div", { class: "option-head" }, [
+            el("span", { class: "option-key", text: o.key }),
+            el("span", { class: "option-name", html: md(o.name).replace(/^<p>|<\/p>$/g, "") }),
+            chosen ? el("span", { class: "option-chosen", text: "✓ " + T.decisionChosen }) : null,
+          ]),
+          o.body ? el("div", { class: "prose option-body", html: md(o.body) }) : null,
+        ]));
+      }
+      card.appendChild(opts);
+      card.appendChild(el("h4", { text: T.decisionReason }));
+      card.appendChild(el("div", { class: "prose decision-reason", html: md(d.reason) }));
+      if (d.files && d.files.length) {
+        card.appendChild(el("div", { class: "decision-files" }, [
+          el("span", { class: "decision-files-label", text: T.decisionFiles }),
+          ...d.files.map((p) => decisionFile(p)),
+        ]));
+      }
+      sec.appendChild(card);
+    });
+    view.appendChild(sec);
+  }
+
+  // A file a decision landed in: lights up in the tree on hover, opens on click.
+  function decisionFile(path) {
+    const idx = fileIndexByPath.get(path);
+    if (idx == null) return el("code", { class: "decision-file", text: path });
+    return markFileRef(el("button", {
+      class: "decision-file change-link", type: "button", text: path, onclick: () => navigate(idx),
+    }), idx, false);
+  }
+
   // The path printed beside a point's title; a reference to its file when it resolves.
   function pointFile(path) {
     const node = el("code", { class: "point-file", text: path });
@@ -1244,7 +1296,9 @@
       const f = DATA.files[file.idx];
       const countBadge = el("span", { class: "match-count" });
       const row = el("div", {
-        class: "nav-item tree-file", role: "treeitem", "data-idx": String(file.idx), title: f.path,
+        // Tests are toned down so the code under review stands out in the tree.
+        class: "nav-item tree-file" + (f.isTest ? " is-test" : ""), role: "treeitem", "data-idx": String(file.idx),
+        title: f.isTest ? `${f.path} (${T.testFile})` : f.path,
         style: `padding-left:${8 + depth * TREE_INDENT + 14}px`, onclick: () => navigate(file.idx),
       }, [
         el("span", { class: "chip " + f.status, text: f.status[0].toUpperCase() }),
@@ -1345,6 +1399,91 @@
   }
 
   // ---------- topbar controls ----------
+  // ---------- sidebar frame: hide/show and resize ----------
+  // Both are reader conveniences, remembered per browser. Storage can be missing
+  // or throw (private window, blocked site data, file:// in some browsers), so
+  // every access is guarded and the defaults always render.
+  const SIDEBAR_PREFS = "diff-recap:sidebar";
+  const SIDEBAR_MIN = 200;
+  const sidebarMax = () => Math.max(SIDEBAR_MIN, Math.round(window.innerWidth * 0.6));
+
+  function readSidebarPrefs() {
+    try { return JSON.parse(localStorage.getItem(SIDEBAR_PREFS)) || {}; } catch (_) { return {}; }
+  }
+  function writeSidebarPrefs(patch) {
+    try { localStorage.setItem(SIDEBAR_PREFS, JSON.stringify(Object.assign(readSidebarPrefs(), patch))); } catch (_) { /* not remembered */ }
+  }
+
+  function wireSidebarFrame() {
+    const app = document.querySelector(".app");
+    const sidebar = document.getElementById("sidebar");
+    const resizer = document.getElementById("rc-resizer");
+    const toggleBtn = document.getElementById("rc-sidebar");
+    const prefs = readSidebarPrefs();
+
+    function setWidth(px, remember) {
+      const w = Math.min(sidebarMax(), Math.max(SIDEBAR_MIN, Math.round(px)));
+      sidebar.style.width = w + "px";
+      resizer.setAttribute("aria-valuenow", String(w));
+      if (remember) writeSidebarPrefs({ width: w });
+    }
+    function setHidden(hidden, remember) {
+      app.classList.toggle("sidebar-hidden", hidden);
+      toggleBtn.setAttribute("aria-expanded", String(!hidden));
+      if (remember) writeSidebarPrefs({ hidden });
+    }
+
+    toggleBtn.title = T.toggleSidebar;
+    toggleBtn.setAttribute("aria-label", T.toggleSidebar);
+    toggleBtn.addEventListener("click", () => setHidden(!app.classList.contains("sidebar-hidden"), true));
+
+    resizer.title = T.resizeSidebar;
+    resizer.setAttribute("aria-label", T.resizeSidebar);
+    resizer.setAttribute("aria-valuemin", String(SIDEBAR_MIN));
+    resizer.setAttribute("aria-valuemax", String(sidebarMax()));
+    if (Number.isFinite(prefs.width)) setWidth(prefs.width, false);
+    else resizer.setAttribute("aria-valuenow", String(sidebar.offsetWidth));
+    setHidden(prefs.hidden === true, false);
+
+    // Drag the handle: the new width is the pointer's distance from the sidebar's left edge.
+    resizer.addEventListener("pointerdown", (e) => {
+      if (e.pointerType === "mouse" && e.button !== 0) return;
+      e.preventDefault();
+      resizer.setPointerCapture(e.pointerId);
+      app.classList.add("resizing");
+      const left = sidebar.getBoundingClientRect().left;
+      const move = (ev) => setWidth(ev.clientX - left, false);
+      const end = () => {
+        resizer.removeEventListener("pointermove", move);
+        resizer.removeEventListener("pointerup", end);
+        resizer.removeEventListener("pointercancel", end);
+        app.classList.remove("resizing");
+        writeSidebarPrefs({ width: sidebar.offsetWidth });
+      };
+      resizer.addEventListener("pointermove", move);
+      resizer.addEventListener("pointerup", end);
+      resizer.addEventListener("pointercancel", end);
+    });
+    // Back to the stylesheet's default width.
+    resizer.addEventListener("dblclick", () => {
+      sidebar.style.width = "";
+      resizer.setAttribute("aria-valuenow", String(sidebar.offsetWidth));
+      writeSidebarPrefs({ width: null });
+    });
+    // Keyboard: arrows move it 16px (64px with Shift).
+    resizer.addEventListener("keydown", (e) => {
+      if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+      e.preventDefault();
+      const step = (e.shiftKey ? 64 : 16) * (e.key === "ArrowLeft" ? -1 : 1);
+      setWidth(sidebar.offsetWidth + step, true);
+    });
+    // A remembered width can exceed the cap on a narrower window.
+    window.addEventListener("resize", () => {
+      resizer.setAttribute("aria-valuemax", String(sidebarMax()));
+      if (sidebar.offsetWidth > sidebarMax()) setWidth(sidebarMax(), false);
+    });
+  }
+
   function buildTopbar() {
     document.getElementById("rc-title").textContent = analysis.title || DATA.meta.repo || "Recap";
     const m = DATA.meta || {};
@@ -1388,6 +1527,7 @@
     buildTopbar();
     buildSidebar();
     wireFileRefHover();
+    wireSidebarFrame();
     document.addEventListener("keydown", (e) => {
       if (e.key === "Escape" && document.getElementById("rc-modal")) closeModal();
     });

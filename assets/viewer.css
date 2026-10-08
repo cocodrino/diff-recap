@@ -107,14 +107,32 @@ a:hover { text-decoration: underline; }
 
 /* ---------- Sidebar ---------- */
 .sidebar {
-  width: 340px; min-width: 220px; max-width: 60vw; flex-shrink: 0;
-  /* Drag the bottom-right corner to widen it when names are long. */
-  resize: horizontal;
-  border-right: 1px solid var(--border);
+  /* Width is set by the resize handle (#rc-resizer); this is the default. */
+  width: 340px; flex-shrink: 0;
   background: var(--bg-elev);
   overflow-y: auto; overflow-x: hidden;
   padding: 8px 0;
 }
+/* The sidebar's right border doubles as its resize handle: a wider invisible
+   hit area, a visible line that lights up on hover and while dragging. */
+.sidebar-resizer {
+  flex-shrink: 0; width: 7px; margin-left: -3px; margin-right: -3px;
+  position: relative; z-index: 5; cursor: col-resize; touch-action: none;
+}
+.sidebar-resizer::after {
+  content: ""; position: absolute; top: 0; bottom: 0; left: 3px; width: 1px;
+  background: var(--border); transition: background .12s, width .12s, left .12s;
+}
+.sidebar-resizer:hover::after, .sidebar-resizer:focus-visible::after, .app.resizing .sidebar-resizer::after {
+  background: var(--accent); width: 3px; left: 2px;
+}
+.sidebar-resizer:focus-visible { outline: none; }
+/* While dragging, nothing else reacts to the pointer and no text gets selected. */
+.app.resizing { cursor: col-resize; user-select: none; }
+.app.resizing .content, .app.resizing .sidebar { pointer-events: none; }
+.app.sidebar-hidden .sidebar, .app.sidebar-hidden .sidebar-resizer { display: none; }
+#rc-sidebar[aria-expanded="false"] { color: var(--text-dim); }
+
 .search-wrap { padding: 8px 12px 4px; position: sticky; top: 0; background: var(--bg-elev); z-index: 2; }
 .sidebar-search {
   width: 100%; box-sizing: border-box; padding: 7px 10px;
@@ -169,6 +187,9 @@ a:hover { text-decoration: underline; }
   font-family: var(--mono); font-size: 12.5px; min-width: 0;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; word-break: normal;
 }
+/* Test files recede so the code under review stands out; hover brings them back. */
+.sidebar .tree-file.is-test .label, .sidebar .tree-file.is-test .chip { opacity: .55; }
+.sidebar .tree-file.is-test:is(:hover, .active, .tree-hl) :is(.label, .chip) { opacity: 1; }
 .tree-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; word-break: normal; }
 
 /* A reference elsewhere on the page is hovered: its file and the folders on its path light up. */
@@ -266,7 +287,6 @@ a:hover { text-decoration: underline; }
 /* A mention of a changed file: hovering it lights the file up in the tree. */
 .file-ref { text-decoration: underline dotted var(--text-dim); text-underline-offset: 3px; border-radius: 4px; }
 .file-ref:hover { background: var(--note-bg); text-decoration-color: var(--accent); }
-.ov-card[data-file-ref]:hover { box-shadow: 0 0 0 1px var(--accent); }
 
 /* ---------- File detail ---------- */
 .back-link {
@@ -366,15 +386,48 @@ a:hover { text-decoration: underline; }
 
 .binary-note { padding: 16px; color: var(--text-dim); font-style: italic; }
 
-/* ---------- Overview cards ---------- */
-.overview-files { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px; margin: 16px 0; }
-.ov-card {
-  padding: 12px 14px; background: var(--bg-elev); border: 1px solid var(--border);
-  border-radius: var(--radius); cursor: pointer; transition: transform .12s, border-color .12s;
+/* ---------- Decisions made ---------- */
+.decisions { max-width: 1100px; margin: 26px 0; }
+.decisions > h2 { font-size: 20px; margin: 0 0 12px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+.decision {
+  margin: 14px 0; padding: 16px 18px; background: var(--bg-elev);
+  border: 1px solid var(--border); border-radius: var(--radius);
 }
-.ov-card:hover { transform: translateY(-2px); border-color: var(--accent); }
-.ov-card .ov-path { font-family: var(--mono); font-size: 12.5px; word-break: break-all; margin-bottom: 6px; }
-.ov-card .ov-meta { display: flex; gap: 8px; align-items: center; }
+.decision h4 {
+  margin: 14px 0 6px; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--text-dim);
+}
+.decision .prose { max-width: none; }
+.decision .prose > :first-child { margin-top: 0; }
+.decision .prose > :last-child { margin-bottom: 0; }
+.decision-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.decision-num {
+  font-family: var(--mono); font-size: 12px; font-weight: 700; color: var(--accent);
+  border: 1px solid var(--accent); border-radius: 999px; min-width: 22px; height: 22px;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.decision-title { margin: 0; font-size: 16px; flex: 1; min-width: 200px; }
+.decided-by { font-size: 11px; font-weight: 700; padding: 2px 9px; border-radius: 999px; color: #fff; }
+/* Who decided is the first thing an auditor looks for: two clearly different colors. */
+.decided-by.by-user { background: var(--chip-ren); }
+.decided-by.by-agent { background: var(--chip-mod); }
+.decision-date { font-family: var(--mono); font-size: 12px; color: var(--text-dim); }
+/* Options stack in a list: with three or more, side-by-side columns get too narrow to read. */
+.decision-options { display: flex; flex-direction: column; gap: 8px; }
+.decision-option {
+  padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg);
+  opacity: .8; font-size: 13px;
+}
+.decision-option.chosen { opacity: 1; border-color: var(--add-bar); box-shadow: inset 3px 0 0 var(--add-bar); }
+.option-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 6px; flex-wrap: wrap; }
+.option-key { font-family: var(--mono); font-weight: 700; color: var(--text-dim); }
+.option-name { font-weight: 650; flex: 1; }
+.option-chosen { font-size: 11px; font-weight: 700; color: var(--add-text); }
+.option-body ul { padding-left: 18px; }
+.decision-reason { padding: 8px 12px; background: var(--note-bg); border-left: 3px solid var(--note-bar); border-radius: 0 8px 8px 0; }
+.decision-files { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+.decision-files-label { font-size: 12px; color: var(--text-dim); }
+.decision-file { font-family: var(--mono); font-size: 12px; }
+.decision-file.change-link::after { content: none; }
 
 .empty { color: var(--text-dim); padding: 40px; text-align: center; }
 
