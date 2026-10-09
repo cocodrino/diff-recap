@@ -55,6 +55,29 @@ function readAsset(name) {
   return readFileSync(p, "utf8");
 }
 
+// The viewer's typefaces, inlined as base64 @font-face rules so the recap keeps
+// its look offline. Latin subset only (covers accents and ñ); a missing file just
+// drops its rule and the CSS font stack falls back to system faces.
+const FONTS = [
+  { family: "Plus Jakarta Sans", weight: "400 800", file: "PlusJakartaSans-latin.woff2" },
+  { family: "IBM Plex Mono", weight: "400", file: "IBMPlexMono-400-latin.woff2" },
+  { family: "IBM Plex Mono", weight: "500", file: "IBMPlexMono-500-latin.woff2" },
+  { family: "IBM Plex Mono", weight: "600", file: "IBMPlexMono-600-latin.woff2" },
+];
+
+function fontFaces() {
+  return FONTS.map(({ family, weight, file }) => {
+    const p = path.join(ASSETS, "fonts", file);
+    if (!existsSync(p)) {
+      console.warn(`Warning: assets/fonts/${file} not found — ${family} falls back to a system font.`);
+      return "";
+    }
+    const b64 = readFileSync(p).toString("base64");
+    return `@font-face{font-family:"${family}";font-style:normal;font-weight:${weight};font-display:swap;` +
+      `src:url(data:font/woff2;base64,${b64}) format("woff2");}`;
+  }).join("\n");
+}
+
 // Safe-embed a JS string/JSON into a <script> tag: neutralize "</script>",
 // "<!--", and the line/paragraph separators that break inline JSON.
 function safeForScript(text) {
@@ -112,7 +135,7 @@ function main() {
   for (const f of data.files) f.isTest = TEST_FILE.test(f.path);
   const lang = (analysis.lang || "en").replace(/[^a-zA-Z-]/g, "") || "en";
 
-  const css = readAsset("viewer.css");
+  const css = fontFaces() + "\n" + readAsset("viewer.css");
   const viewerJs = readAsset("viewer.js");
   const mermaidJs = readAsset("mermaid.min.js");
   if (!mermaidJs) {

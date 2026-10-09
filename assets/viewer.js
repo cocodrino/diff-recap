@@ -1510,20 +1510,55 @@
     });
   }
 
+  // Mermaid draws with its own palette; "base" + themeVariables makes it use the viewer's.
+  function initMermaid() {
+    const dark = document.documentElement.getAttribute("data-theme") !== "light";
+    const css = getComputedStyle(document.documentElement);
+    const v = (name) => css.getPropertyValue(name).trim();
+    window.mermaid.initialize({
+      startOnLoad: false,
+      securityLevel: "loose",
+      theme: "base",
+      // Inside the SVG's own styles so Mermaid measures the labels at this weight.
+      themeCSS: ".node .label, .node .nodeLabel, .node text { font-weight: 600; }",
+      themeVariables: {
+        darkMode: dark,
+        fontFamily: v("--sans"),
+        fontSize: "15px",
+        background: v("--bg"),
+        primaryColor: v("--node-bg"),
+        primaryTextColor: v("--node-text"),
+        primaryBorderColor: v("--node-border"),
+        nodeTextColor: v("--node-text"),
+        secondaryColor: v("--bg-elev"),
+        tertiaryColor: v("--bg-elev"),
+        lineColor: v("--text-dim"),
+        textColor: v("--text"),
+        clusterBkg: v("--bg-elev"),
+        clusterBorder: v("--border-strong"),
+        edgeLabelBackground: v("--bg-elev"),
+        noteBkgColor: v("--bg-elev-2"),
+        noteTextColor: v("--text"),
+        noteBorderColor: v("--accent"),
+        actorBkg: v("--node-bg"),
+        actorBorder: v("--node-border"),
+        actorTextColor: v("--node-text"),
+        signalColor: v("--text-soft"),
+        signalTextColor: v("--text"),
+      },
+    });
+  }
+
   function reInitMermaid() {
     if (!window.mermaid) return;
-    const dark = document.documentElement.getAttribute("data-theme") !== "light";
-    window.mermaid.initialize({ startOnLoad: false, theme: dark ? "dark" : "default", securityLevel: "loose" });
+    initMermaid();
     // Redraw the diagrams in the new theme without losing the reader's place.
     if (current === -1) renderOverview(content().scrollTop);
   }
 
   // ---------- boot ----------
   document.addEventListener("DOMContentLoaded", () => {
-    if (window.mermaid) {
-      const dark = document.documentElement.getAttribute("data-theme") !== "light";
-      window.mermaid.initialize({ startOnLoad: false, theme: dark ? "dark" : "default", securityLevel: "loose" });
-    }
+    if (window.mermaid) initMermaid();
     buildTopbar();
     buildSidebar();
     wireFileRefHover();
@@ -1539,6 +1574,11 @@
     window.addEventListener("popstate", route);
     window.addEventListener("hashchange", route);
     // Honors a deep link like #file/2 on load; otherwise shows the overview.
-    route();
+    // Mermaid sizes each box from the text width, so the first render waits for the
+    // inlined diagram font; otherwise long labels get clipped. Capped so it never hangs.
+    const fontReady = document.fonts
+      ? Promise.race([document.fonts.load('15px "Plus Jakarta Sans"'), new Promise((r) => setTimeout(r, 1500))])
+      : Promise.resolve();
+    fontReady.catch(() => {}).then(route);
   });
 })();
