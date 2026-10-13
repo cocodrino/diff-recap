@@ -122,6 +122,19 @@ export function validateAnalysis(data, analysis) {
     if (!files.has(p)) errors.push(`files["${p}"]: not a changed file in recap-data.json`);
   }
 
+  // ---- whatItDoes: the translation of the file's own purpose header ----
+  // A header the reader cannot see is a lost fact; a whatItDoes with no header
+  // behind it is a purpose the recap made up.
+  for (const f of data.files || []) {
+    const what = (analysisFiles[f.path] || {}).whatItDoes;
+    const hasWhat = typeof what === "string" && what.trim() !== "";
+    if (f.purposeHeader && !hasWhat) {
+      errors.push(`files["${f.path}"]: no "whatItDoes" — the file has a purpose header; translate it faithfully into the recap's lang (add nothing)`);
+    } else if (!f.purposeHeader && what != null) {
+      warnings.push(`files["${f.path}"].whatItDoes: the file has no purpose header — this would invent a purpose; remove it`);
+    }
+  }
+
   for (const f of data.files || []) {
     if (f.binary || f.status === "removed" || !f.hunks.length) continue;
     const af = analysisFiles[f.path] || {};

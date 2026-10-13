@@ -17,7 +17,7 @@
   const LABELS = {
     en: {
       overview: "Overview", files: "Files", commits: "Commits",
-      whyFile: "Why this file changed", ai: "AI",
+      whatFile: "What this file does", whyFile: "Why this file changed", ai: "AI",
       complex: "Complex", detailed: "Detailed explanation", codeFlow: "Code flow",
       searchPlaceholder: "Search files & code…",
       filesCount: "files", split: "Split", unified: "Unified",
@@ -47,7 +47,7 @@
     },
     es: {
       overview: "Resumen", files: "Archivos", commits: "Commits",
-      whyFile: "Por qué cambió este archivo", ai: "IA",
+      whatFile: "Qué hace este archivo", whyFile: "Por qué cambió este archivo", ai: "IA",
       complex: "Complejo", detailed: "Explicación detallada", codeFlow: "Flujo del código",
       searchPlaceholder: "Buscar archivos y código…",
       filesCount: "archivos", split: "Lado a lado", unified: "Unificado",
@@ -794,12 +794,7 @@
     ]);
     view.appendChild(head);
 
-    if (af.purpose) {
-      view.appendChild(el("div", { class: "file-purpose" }, [
-        el("span", { class: "ai-tag", text: T.whyFile }),
-        el("div", { html: md(af.purpose) }),
-      ]));
-    }
+    fileIntro(f, af).forEach((b) => view.appendChild(b));
 
     if (f.binary) {
       view.appendChild(el("div", { class: "binary-note", text: T.binary }));
@@ -814,6 +809,27 @@
 
     show(view);
     setActiveNav(idx);
+  }
+
+  // The blocks that introduce a file, shared by the file view and the change
+  // modal: "What this file does" (the translation of the file's own purpose
+  // header — only when collect.mjs found one, so it is never made up), then
+  // "Why this file changed" (the AI's reading of the diff).
+  function fileIntro(f, af) {
+    const blocks = [];
+    if (f.purposeHeader && af.whatItDoes) {
+      blocks.push(el("div", { class: "file-purpose file-what" }, [
+        el("span", { class: "ai-tag", text: T.whatFile }),
+        el("div", { html: md(af.whatItDoes) }),
+      ]));
+    }
+    if (af.purpose) {
+      blocks.push(el("div", { class: "file-purpose" }, [
+        el("span", { class: "ai-tag", text: T.whyFile }),
+        el("div", { html: md(af.purpose) }),
+      ]));
+    }
+    return blocks;
   }
 
   // One hunk: header, the AI annotation, then the diff. Shared by the file view
@@ -941,13 +957,7 @@
 
     const body = el("div", { class: "modal-body" });
     const focused = el("div", { class: "modal-focus" });
-    const af = analysisFiles[f.path] || {};
-    if (af.purpose) {
-      focused.appendChild(el("div", { class: "file-purpose" }, [
-        el("span", { class: "ai-tag", text: T.whyFile }),
-        el("div", { html: md(af.purpose) }),
-      ]));
-    }
+    fileIntro(f, analysisFiles[f.path] || {}).forEach((b) => focused.appendChild(b));
     let focusAnchor = null;
     if (hunk) {
       const box = renderHunkBox(f, hunk, target.hunkIdx, { unified: true, focus: target.focus });

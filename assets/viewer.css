@@ -404,6 +404,14 @@ a:hover { text-decoration: underline; }
   font-family: var(--mono); font-size: 12px; font-weight: 600; text-transform: uppercase;
   letter-spacing: .16em; color: var(--accent); display: block; margin-bottom: 6px;
 }
+/* "What this file does": the file's own header, translated — a fact about the
+   file, not the AI's reading of the diff, so it reads neutral, not accented. */
+.file-purpose.file-what {
+  margin-bottom: 12px;
+  background: var(--bg-elev-2); border-left-color: var(--border-strong);
+}
+.file-purpose.file-what .ai-tag { color: var(--text-dim); }
+.file-purpose.file-what + .file-purpose { margin-top: 0; }
 
 .hunk {
   margin: 22px 0; border: 1px solid var(--border); border-radius: var(--radius);

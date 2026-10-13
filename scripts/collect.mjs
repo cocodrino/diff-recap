@@ -204,6 +204,44 @@ function fullContent(file, ref) {
   return lines.length > MAX_FULL_FILE_LINES ? { truncated: true } : { lines };
 }
 
+// The purpose header some projects put at the top of a file:
+//   // WHAT DOES THIS FILE DO:
+//   // <a few lines of plain English>
+// The marker line plus the consecutive `//` lines right after it, markers
+// stripped and joined. Text on the marker line itself, after the colon, counts
+// too. null when the file has no header (or it is not in the lines we have) —
+// the recap never invents one.
+const PURPOSE_MARKER = "WHAT DOES THIS FILE DO:";
+const LINE_COMMENT = /^\s*\/\//;
+
+// `lines` is a run of consecutive new-file lines. `mustClose` demands that the
+// header's comment block END inside the run (a non-`//` line after it), so a
+// partial run — one hunk of a truncated file — never yields a cut-off header.
+function purposeHeader(lines, mustClose = false) {
+  if (!lines) return null;
+  const at = lines.findIndex((l) => LINE_COMMENT.test(l) && l.includes(PURPOSE_MARKER));
+  if (at < 0) return null;
+  const strip = (l) => l.replace(LINE_COMMENT, "").replace(/^\/*/, "").trim();
+  const text = [lines[at].slice(lines[at].indexOf(PURPOSE_MARKER) + PURPOSE_MARKER.length).trim()];
+  let i = at + 1;
+  for (; i < lines.length && LINE_COMMENT.test(lines[i]); i++) text.push(strip(lines[i]));
+  if (mustClose && i >= lines.length) return null;
+  const joined = text.filter(Boolean).join(" ").trim();
+  return joined || null;
+}
+
+// The header from the full new content; for a file over the size cap, from a
+// hunk that holds the whole header (its new-side lines are consecutive).
+function purposeHeaderOf(file) {
+  if (file.fullLines) return purposeHeader(file.fullLines);
+  if (!file.fullTruncated) return null;
+  for (const h of file.hunks) {
+    const found = purposeHeader(h.lines.filter((l) => l.type !== "del").map((l) => l.content), true);
+    if (found) return found;
+  }
+  return null;
+}
+
 function main() {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) {
@@ -276,6 +314,8 @@ function main() {
     const full = fullContent(f, ref);
     if (full?.lines) f.fullLines = full.lines;
     else if (full?.truncated) f.fullTruncated = true;
+    // The file's own "what does this file do" header, as written (a fact).
+    f.purposeHeader = purposeHeaderOf(f);
   }
 
   // Commits in range.

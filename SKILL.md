@@ -104,8 +104,28 @@ automatically.
 `recap-data.json` holds the facts: real paths, statuses (added/modified/removed/
 renamed), per-file insertions/deletions, parsed hunks with before/after lines,
 the full NEW content of each changed file (`fullLines`, capped at 5000 lines —
-longer files get `fullTruncated: true`), and the commits in range. **Never edit
-this file** — it is the source of truth.
+longer files get `fullTruncated: true`), the file's own purpose header
+(`purposeHeader`, see below), and the commits in range. **Never edit this
+file** — it is the source of truth.
+
+**Purpose header (`purposeHeader`).** Some projects open each file with a short
+comment that says what the file is for (the Venflow repo started with
+`backend/app/engine`):
+
+```ts
+// WHAT DOES THIS FILE DO:
+// <2–4 lines of plain English>
+
+```
+
+`collect.mjs` reads it from the NEW content of each changed file: the line
+holding the marker `WHAT DOES THIS FILE DO:` (case-sensitive, any leading `//`
+and spaces) plus the consecutive `//` lines right after it, up to the first
+line that is not a `//` comment. The comment markers are stripped and the lines
+joined into one English string. A file without the marker gets `null`; so does
+a file over the 5000-line cap unless one hunk holds the whole header. It is
+copied, never written: the recap does not invent a purpose a file does not
+declare.
 
 **Tracked files only.** This is a `git diff`, so it only sees changes git
 tracks: committed changes between the two refs, or — with `--working` —
@@ -124,7 +144,7 @@ the diff does not contain a fact, do not invent it.** A confidently wrong recap
 is dangerous in review.
 
 **Language.** Write ALL prose — `title`, `summary`, diagram labels, file
-`purpose`, and hunk explanations — in the language the orchestrator passed you
+`whatItDoes` and `purpose`, and hunk explanations — in the language the orchestrator passed you
 (the language the user is conversing in). Set `"lang"` to the matching code
 (`"es"`, `"en"`, …) so the viewer's own chrome (buttons, section titles) is
 localized to match. English and Spanish chrome are built in; other codes keep
@@ -165,6 +185,7 @@ Schema (all fields optional except where noted — omit what does not apply):
   },
   "files": {
     "<exact path from recap-data.json>": {
+      "whatItDoes": "ONLY when the file has a purposeHeader: that header translated into `lang`, faithfully, adding nothing.",
       "purpose": "Markdown. What role this file plays in the change and why it changed.",
       "steps": [
         { "from": 3311, "to": 3317, "text": "Markdown. What this stretch of code ACHIEVES, in plain words (e.g. 'Sets this charge attempt aside; if it was already set aside, does not call the bank again')." }
@@ -269,6 +290,12 @@ Authoring guidance:
     modified code; context lines may be included when they belong to the step.
     Steps must not overlap. Leave trivial lines (imports, closing braces) out.
   - Skip `steps` for test files, generated files and pure renames.
+- **Per-file `whatItDoes`** for every file whose `purposeHeader` is not null,
+  and for no other. It is a **faithful translation of the header, adding
+  nothing**: same claims, plain and simple words, no detail taken from the diff
+  or from your own reading of the code (that belongs in `purpose`). With
+  `lang: "en"` it may be the header itself. A file with no header gets no
+  `whatItDoes` — do not write one from the code.
 - **Per-file `purpose`** for every meaningful file: why it exists in this change.
 - **Comment EVERY hunk**, keyed by the hunk's array index (`"0"`, `"1"`, …) as
   ordered in `recap-data.json`. Do not cherry-pick only the load-bearing hunks —
@@ -302,10 +329,13 @@ It checks `analysis.json` against `recap-data.json` and exits 1 on any error:
   explaining is inside a step** (blank lines, lone punctuation, comments and
   imports are exempt). A generated file may be exempted only explicitly, with
   `"stepsSkip": "<reason>"`;
-- steps do not overlap and have text.
+- steps do not overlap and have text;
+- every file with a `purposeHeader` has a non-empty `whatItDoes`.
 
 Warnings (two bullets opening the same hunk with no `lines`, a step that covers
 no changed line) are not fatal but almost always mean a wrong number — fix them.
+A `whatItDoes` on a file with no `purposeHeader` is also a warning: it would
+invent a purpose the file never declared, so remove it (the viewer ignores it).
 
 **Fix and re-run until it reports 0 errors.** `generate.mjs` runs the same
 checks and refuses to write `recap.html` while any error remains; do not reach
@@ -346,8 +376,11 @@ user. That path IS the deliverable.
   hunk, and a jump to the file view. Close with ✕, Esc, or a click outside.
   Files over 5000 lines keep only the hunk (`fullTruncated` in the data).
 - **Per-file detail** (click a file or open `recap.html#file/<n>`): the file's
-  status, the AI "why this file changed" note, then each hunk with its AI
-  annotation above a **side-by-side diff** (old vs. new, line-numbered).
+  status, the **"What this file does"** block (only when the file has a purpose
+  header: `whatItDoes`, in a neutral style because it restates the file's own
+  words), the AI "why this file changed" note, then each hunk with its AI
+  annotation above a **side-by-side diff** (old vs. new, line-numbered). The
+  change modal opens with the same two blocks, in the same order.
 - **File tree sidebar** (GitHub review style): only the changed files, grouped
   by folder, single-child folders merged (`backend/app`), folders collapsible,
   search filters files and folders. Test files (same rule as `validate.mjs`'s
