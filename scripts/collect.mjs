@@ -209,18 +209,26 @@ function fullContent(file, ref) {
 //   // <a few lines of plain English>
 // The marker line plus the consecutive `//` lines right after it, markers
 // stripped and joined. Text on the marker line itself, after the colon, counts
-// too. null when the file has no header (or it is not in the lines we have) —
-// the recap never invents one.
+// too. It counts only as the file's OPENING (line 1; only a shebang and blank
+// lines may come before it) and only in a source file whose comments are `//`:
+// the marker quoted further down — in a Markdown code example, say — is not the
+// file's header. null otherwise — the recap never invents one.
 const PURPOSE_MARKER = "WHAT DOES THIS FILE DO:";
 const LINE_COMMENT = /^\s*\/\//;
+const SLASH_COMMENT_LANGS = new Set([
+  "typescript", "tsx", "javascript", "jsx", "go", "rust", "java", "kotlin",
+  "swift", "c", "cpp", "csharp", "php", "scss", "less",
+]);
 
-// `lines` is a run of consecutive new-file lines. `mustClose` demands that the
-// header's comment block END inside the run (a non-`//` line after it), so a
-// partial run — one hunk of a truncated file — never yields a cut-off header.
+// `lines` is the file's new content from line 1 (or a prefix of it). `mustClose`
+// demands that the header's comment block END inside the run (a non-`//` line
+// after it), so a partial run — one hunk of a truncated file — never yields a
+// cut-off header.
 function purposeHeader(lines, mustClose = false) {
   if (!lines) return null;
-  const at = lines.findIndex((l) => LINE_COMMENT.test(l) && l.includes(PURPOSE_MARKER));
-  if (at < 0) return null;
+  let at = lines.length && lines[0].startsWith("#!") ? 1 : 0;
+  while (at < lines.length && !lines[at].trim()) at++;
+  if (at >= lines.length || !LINE_COMMENT.test(lines[at]) || !lines[at].includes(PURPOSE_MARKER)) return null;
   const strip = (l) => l.replace(LINE_COMMENT, "").replace(/^\/*/, "").trim();
   const text = [lines[at].slice(lines[at].indexOf(PURPOSE_MARKER) + PURPOSE_MARKER.length).trim()];
   let i = at + 1;
@@ -230,16 +238,16 @@ function purposeHeader(lines, mustClose = false) {
   return joined || null;
 }
 
-// The header from the full new content; for a file over the size cap, from a
-// hunk that holds the whole header (its new-side lines are consecutive).
+// The header from the full new content; for a file over the size cap, from the
+// hunk that starts at new line 1 and holds the whole header (its new-side lines
+// are the file's first lines, in order).
 function purposeHeaderOf(file) {
+  if (!SLASH_COMMENT_LANGS.has(file.language)) return null;
   if (file.fullLines) return purposeHeader(file.fullLines);
   if (!file.fullTruncated) return null;
-  for (const h of file.hunks) {
-    const found = purposeHeader(h.lines.filter((l) => l.type !== "del").map((l) => l.content), true);
-    if (found) return found;
-  }
-  return null;
+  const first = file.hunks.find((h) => h.newStart === 1);
+  if (!first) return null;
+  return purposeHeader(first.lines.filter((l) => l.type !== "del").map((l) => l.content), true);
 }
 
 function main() {

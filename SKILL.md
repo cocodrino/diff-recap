@@ -122,10 +122,17 @@ comment that says what the file is for (the Venflow repo started with
 holding the marker `WHAT DOES THIS FILE DO:` (case-sensitive, any leading `//`
 and spaces) plus the consecutive `//` lines right after it, up to the first
 line that is not a `//` comment. The comment markers are stripped and the lines
-joined into one English string. A file without the marker gets `null`; so does
-a file over the 5000-line cap unless one hunk holds the whole header. It is
-copied, never written: the recap does not invent a purpose a file does not
-declare.
+joined into one English string.
+
+It counts **only at the top of the file, and only in source files**: the marker
+line must be the file's first line — only a shebang (`#!…`) and blank lines may
+come before it — and the file must be a language whose comments are `//` (TS,
+JS, Go, Rust, Java, Kotlin, Swift, C/C++, C#, PHP, SCSS, Less). Markdown, JSON
+and other prose or data files never have one, so a marker quoted in a code
+example (a skill documenting the convention, say) is not mistaken for the
+file's purpose. Anything else gets `null`; so does a file over the 5000-line cap
+unless the hunk that starts at new line 1 holds the whole header. It is copied,
+never written: the recap does not invent a purpose a file does not declare.
 
 **Tracked files only.** This is a `git diff`, so it only sees changes git
 tracks: committed changes between the two refs, or — with `--working` —
@@ -327,8 +334,16 @@ It checks `analysis.json` against `recap-data.json` and exits 1 on any error:
   `lines` fall inside that hunk;
 - every changed non-test file has `steps`, and **every changed line that needs
   explaining is inside a step** (blank lines, lone punctuation, comments and
-  imports are exempt). A generated file may be exempted only explicitly, with
-  `"stepsSkip": "<reason>"`;
+  import lines are exempt). Imports are recognised by the file's extension, with
+  each language's own shape: JS/TS/Vue/Svelte `import …` (multi-line until the
+  `from "…"`), Python `import x` / `from x import y` (parenthesised multi-line
+  too), Go `import "x"` and `import ( … )` blocks, Java/Kotlin/Scala `import`,
+  C# `using …;`, Rust and PHP `use …;` (multi-line until the `;`). A multi-line
+  import ends at the first line that does not look like part of one, so an
+  unfinished import never exempts the code after it. Prose and data files
+  (`.md`, `.mdx`, `.txt`, `.json`, `.yaml`…) have no import exemption — an
+  `import` in a Markdown code example is a line like any other. A generated file
+  may be exempted only explicitly, with `"stepsSkip": "<reason>"`;
 - steps do not overlap and have text;
 - every file with a `purposeHeader` has a non-empty `whatItDoes`.
 

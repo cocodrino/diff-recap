@@ -25,22 +25,86 @@ export const TEST_FILE = /(^|\/)(__tests__|__mocks__|e2e)\/|\.(test|spec)\.[^/]+
 // comment IS the explanation; steps describe what the code does).
 const TRIVIAL_LINE = /^[\s{}()[\];,]*$/;
 const COMMENT_LINE = /^\s*(\/\/|\/\*|\*|#(?!!))/;
-const IMPORT_START = /^\s*import\b/;
-const IMPORT_END = /\bfrom\s+["'`]|^\s*import\s+["'`]/;
+// ---- import exemption, per language ----
+// An import line has nothing to explain, but what an import LOOKS like depends
+// on the language, so each source language gets its own shape:
+//   start  — the line opens an import statement;
+//   open   — that opening line leaves it unfinished (continues on later lines);
+//   end    — the line that finishes a multi-line import;
+//   member — a line that can sit INSIDE one (a name, a path, a comma).
+// A multi-line import stays open only while its lines keep the member shape: the
+// first line that is neither member nor end closes it and is judged as code. So
+// an unterminated `import {` cannot swallow the rest of a hunk.
+// Prose and data files (.md, .txt, .json, .yaml…) have no rule: an `import` in a
+// Markdown code example is a line like any other.
+// `end` and `member` accept ONLY import-shaped text, so a line of code
+// (`const x = a + 1;`, `print(x)`) can neither continue nor close an import.
+// Names, `as` aliases and commas only — `a,` / `type B as C, D` — no `=`, `(`, `.`.
+const ID_LIST = /^[\s\w$*,]+$/;
+const ENDS_SEMI = /;\s*$/;
+const JS_IMPORT = {
+  start: /^\s*import\b/,
+  open: (c) => /[{,]\s*$/.test(c) && !/\bfrom\s+["'`]/.test(c),
+  end: /^[\s\w$*,{}]*\bfrom\s+["'`][^"'`]*["'`]\s*;?\s*$/, // `} from "./x";`
+  member: ID_LIST,
+};
+const PY_IMPORT = {
+  start: /^\s*(import\s+[\w.]|from\s+[\w.]+\s+import\b)/,
+  open: (c) => c.includes("(") && !c.includes(")"),
+  end: /^[\s\w*,]*\)\s*$/, // `    c)` / `)`
+  member: ID_LIST,
+};
+const GO_IMPORT = {
+  start: /^\s*import\b/,
+  open: (c) => /\(\s*$/.test(c),
+  end: /^\s*\)/,
+  member: /^\s*([\w.]+\s+)?"[^"]*"\s*$/,
+};
+const JVM_IMPORT = { start: /^\s*import\s+[\w.`]+/, open: () => false };
+const CS_USING = { start: /^\s*(global\s+)?using\s+(static\s+)?[\w.]+(\s*=\s*[\w.<>,\s]+)?\s*;\s*$/, open: () => false };
+const RUST_USE = {
+  start: /^\s*(pub(\([^)]*\))?\s+)?use\s+[\w:{]/,
+  open: (c) => !ENDS_SEMI.test(c),
+  end: /^[\s\w:*{},]*;\s*$/, // `};`
+  member: /^[\s\w:*{},]+$/, // `fmt::Display,` / `io::{self, Read},` / `},`
+};
+const PHP_USE = {
+  start: /^\s*use\s+[\\\w]/,
+  open: (c) => !ENDS_SEMI.test(c),
+  end: /^[\s\\\w,{}]*;\s*$/, // `};`
+  member: /^[\s\\\w,]+$/, // `Foo\Bar,` / `Baz as Qux,`
+};
+const IMPORT_RULES = {
+  ts: JS_IMPORT, tsx: JS_IMPORT, js: JS_IMPORT, jsx: JS_IMPORT, mjs: JS_IMPORT,
+  cjs: JS_IMPORT, mts: JS_IMPORT, cts: JS_IMPORT, vue: JS_IMPORT, svelte: JS_IMPORT,
+  py: PY_IMPORT, go: GO_IMPORT,
+  java: JVM_IMPORT, kt: JVM_IMPORT, kts: JVM_IMPORT, scala: JVM_IMPORT, cs: CS_USING,
+  rs: RUST_USE, php: PHP_USE,
+};
+
+function importRuleFor(filePath) {
+  const base = filePath.split("/").pop().toLowerCase();
+  return base.includes(".") ? IMPORT_RULES[base.split(".").pop()] || null : null;
+}
 
 // The NEW line numbers of a file's added lines that need a step: not trivial,
-// not a comment, and not part of an import statement (including a multi-line
-// `import { … } from "…"`, tracked across the hunk's lines).
+// not a comment, and not part of an import statement of the file's language
+// (multi-line ones tracked across the hunk's lines, see the rules above).
 function explainableAddedLines(f) {
   const out = [];
+  const rule = importRuleFor(f.path);
   for (const h of f.hunks) {
-    let inImport = false;
+    let open = false;
     for (const l of h.lines) {
       if (l.type === "del") continue;
-      const startsImport = IMPORT_START.test(l.content);
-      const isImport = inImport || startsImport;
-      if (startsImport) inImport = !IMPORT_END.test(l.content);
-      else if (inImport && IMPORT_END.test(l.content)) inImport = false;
+      const c = l.content;
+      let isImport = false;
+      if (open) {
+        if (rule.end.test(c)) { isImport = true; open = false; }
+        else if (rule.member.test(c) || TRIVIAL_LINE.test(c) || COMMENT_LINE.test(c)) isImport = true;
+        else open = false; // shape broke: the import is over, this line is code
+      }
+      if (!isImport && rule && rule.start.test(c)) { isImport = true; open = rule.open(c); }
       if (l.type !== "add" || isImport) continue;
       if (TRIVIAL_LINE.test(l.content) || COMMENT_LINE.test(l.content)) continue;
       out.push(l.newNum);
